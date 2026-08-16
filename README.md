@@ -106,15 +106,7 @@ Issues and pull requests are welcome. A few things worth knowing:
   a full build.
 - Use the demo library rather than committing audio files.
 
-Known gaps, if you're looking for somewhere to start:
 
-- **Playlists.** You can play albums, artists and the whole library, but not build your own
-  sets. No M3U import either.
-- **Swipe-back on iOS.** Album/artist detail uses a conditional swap rather than a
-  `NavigationStack`, so the edge-swipe gesture doesn't work. `navigationDestination(item:)`
-  would fix it.
-- **Gapless playback.** Tracks are scheduled one at a time; there's a small gap between them.
-- **No tests.** The audio and parsing layers would benefit most.
 
 ## Credits and licence
 
