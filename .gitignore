@@ -1,0 +1,20 @@
+# Build output
+build/
+.build/
+DerivedData/
+*.xcuserstate
+
+# Xcode user state — personal window layouts, breakpoints, scheme selections
+xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+
+# Local device configuration — never commit your device identifier
+.device-udid
+
+# Generated
+demo-library/
+Resources/AppIcon.icns
+Resources/AppIcon.png
+
+.DS_Store
