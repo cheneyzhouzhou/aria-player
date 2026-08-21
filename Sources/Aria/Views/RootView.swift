@@ -5,6 +5,7 @@ import SwiftUI
 enum Route: Hashable {
     case album(Album)
     case artist(Artist)
+    case playlist(Playlist)
 }
 
 @MainActor
@@ -41,13 +42,14 @@ enum RailDestination: String, CaseIterable {
 }
 
 enum LibraryTab: String, CaseIterable {
-    case songs, albums, artists, recent
+    case songs, albums, artists, playlists, recent
 
     var title: String {
         switch self {
         case .songs: return "Songs"
         case .albums: return "Albums"
         case .artists: return "Artists"
+        case .playlists: return "Playlists"
         case .recent: return "Recent"
         }
     }
@@ -59,6 +61,7 @@ struct RootView: View {
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var player: AudioPlayer
     @EnvironmentObject var palettes: PaletteStore
+    @EnvironmentObject var playlistStore: PlaylistStore
     @StateObject private var nav = Navigator()
     @Environment(\.colorScheme) private var scheme
 
@@ -189,6 +192,7 @@ struct RootView: View {
             switch route {
             case .album(let album): AlbumDetailView(album: album)
             case .artist(let artist): ArtistDetailView(artist: artist)
+            case .playlist(let list): PlaylistDetailView(playlist: list)
             }
         }
     }
@@ -225,6 +229,8 @@ struct RootView: View {
                     AlbumGridView(albums: filteredAlbums)
                 case .artists:
                     ArtistListView(artists: filteredArtists)
+                case .playlists:
+                    PlaylistListView(playlists: playlistStore.playlists)
                 case .recent:
                     SongListView(tracks: filtered(library.tracks).sorted { $0.dateAdded > $1.dateAdded })
                 }

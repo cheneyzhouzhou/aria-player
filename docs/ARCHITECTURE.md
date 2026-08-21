@@ -93,6 +93,32 @@ decibels, and `Player/Equalizer.swift` was generated from that data rather than 
 Switching the equalizer off sets `bypass` on every band rather than zeroing the gains, so
 there is no processing cost when it isn't in use.
 
+## Playlists
+
+Membership can't be stored as an absolute path — that changes between machines — so each
+entry keeps three identifiers and resolution tries them in order:
+
+1. **Relative path** below the library root. Reliable when the layout matches.
+2. **Title + album** from the file's own tags. This is what rescues a playlist moved to a
+   phone: copying to iOS rewrites any non-ASCII character in a filename, so
+   `hell's middle child.flac` arrives as `hell?s middle child.flac`, while the tags inside
+   the file are untouched.
+3. **Filename**, as a last resort.
+
+Paths are normalised by stripping a leading `/private` before comparison. `/tmp` and `/var`
+are both symlinks, so a root recorded as `/var/mobile/…` and a file reported as
+`/private/var/mobile/…` name the same place while sharing no prefix — without normalising,
+the relative path is silently lost and everything falls back to filename matching.
+
+`importFolders` builds one playlist per top-level folder, which turns an existing
+folder-per-genre layout into something playable in a single click.
+
+## De-duplication
+
+Tracks are collapsed when title, artist, album and rounded duration all match — narrow
+enough to keep two different songs that share a title, broad enough to catch a re-download.
+Where a name ends in `_01`, `_02` and so on, that copy is the one dropped.
+
 ## Platform abstraction
 
 `Platform/Platform.swift` is the whole of it: a `PlatformImage` typealias, an

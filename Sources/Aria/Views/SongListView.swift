@@ -181,6 +181,8 @@ struct TrackMenu: View {
     let context: [Track]
 
     @EnvironmentObject var player: AudioPlayer
+    @EnvironmentObject var playlistStore: PlaylistStore
+    @EnvironmentObject var library: LibraryStore
 
     var body: some View {
         Button("Play") { player.play(track, in: context) }
@@ -192,5 +194,16 @@ struct TrackMenu: View {
             Button("Reveal in Finder") { Platform.reveal(track.url) }
         }
         Button("Copy title") { Platform.copyToPasteboard(track.title) }
+
+        if !playlistStore.playlists.isEmpty {
+            Divider()
+            Menu("Add to playlist") {
+                ForEach(playlistStore.playlists) { list in
+                    Button(list.name) {
+                        playlistStore.add(track, to: list, root: library.rootPath)
+                    }
+                }
+            }
+        }
     }
 }

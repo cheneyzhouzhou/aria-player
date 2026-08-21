@@ -61,7 +61,7 @@ final class LibraryStore: ObservableObject {
         isScanning = true
         let root = rootPath
         let urls = await Task.detached(priority: .userInitiated) { Self.flacURLs(under: root) }.value
-        let found = await Self.parseHeaders(of: urls)
+        let found = Self.deduplicate(await Self.parseHeaders(of: urls))
         // Preserve the original dateAdded for files already known, so a rescan
         // doesn't reshuffle "Recently Added".
         let known = Dictionary(uniqueKeysWithValues: tracks.map { ($0.id, $0.dateAdded) })
@@ -110,6 +110,42 @@ final class LibraryStore: ObservableObject {
             for await (index, track) in group { results[index] = track }
             return results.compactMap { $0 }
         }
+    }
+
+    /// Drops repeat copies of the same recording.
+    ///
+    /// Downloaders often leave a second copy beside the first — same tags, same
+    /// length, a "_01" suffix on the name. Matching on title, artist, album and
+    /// duration keeps genuinely different songs that happen to share a title,
+    /// and the copy with the tidier filename wins.
+    nonisolated static func deduplicate(_ tracks: [Track]) -> [Track] {
+        var best: [String: Track] = [:]
+        var order: [String] = []
+
+        for track in tracks {
+            let key = [track.title.lowercased(), track.artist.lowercased(),
+                       track.album.lowercased(), String(Int(track.duration.rounded()))]
+                .joined(separator: "\u{1}")
+            guard let existing = best[key] else {
+                best[key] = track
+                order.append(key)
+                continue
+            }
+            if preferred(track, over: existing) { best[key] = track }
+        }
+        return order.compactMap { best[$0] }
+    }
+
+    /// A name ending in "_01", "_02" and so on marks the later duplicate.
+    nonisolated private static func preferred(_ lhs: Track, over rhs: Track) -> Bool {
+        func isCopy(_ t: Track) -> Bool {
+            let stem = t.url.deletingPathExtension().lastPathComponent
+            guard let underscore = stem.lastIndex(of: "_") else { return false }
+            let suffix = stem[stem.index(after: underscore)...]
+            return suffix.count == 2 && suffix.allSatisfy(\.isNumber)
+        }
+        if isCopy(lhs) != isCopy(rhs) { return !isCopy(lhs) }
+        return lhs.url.path < rhs.url.path
     }
 
     // MARK: - Cache

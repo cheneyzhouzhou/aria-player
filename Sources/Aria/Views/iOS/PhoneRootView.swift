@@ -7,6 +7,7 @@ struct PhoneRootView: View {
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var player: AudioPlayer
     @EnvironmentObject var palettes: PaletteStore
+    @EnvironmentObject var playlistStore: PlaylistStore
     @StateObject private var nav = Navigator()
     @Environment(\.colorScheme) private var scheme
 
@@ -83,6 +84,7 @@ struct PhoneRootView: View {
                 switch route {
                 case .album(let album): AlbumDetailView(album: album)
                 case .artist(let artist): ArtistDetailView(artist: artist)
+                case .playlist(let list): PlaylistDetailView(playlist: list)
                 }
             }
         } else {
@@ -122,6 +124,8 @@ struct PhoneRootView: View {
                     AlbumGridView(albums: filteredAlbums)
                 case .artists:
                     ArtistListView(artists: filteredArtists)
+                case .playlists:
+                    PlaylistListView(playlists: playlistStore.playlists)
                 case .recent:
                     SongListView(tracks: filtered(library.tracks).sorted { $0.dateAdded > $1.dateAdded })
                 }

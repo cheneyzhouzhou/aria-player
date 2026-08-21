@@ -5,6 +5,7 @@ struct AriaApp: App {
     @StateObject private var library = LibraryStore()
     @StateObject private var player = AudioPlayer()
     @StateObject private var palettes = PaletteStore()
+    @StateObject private var playlists = PlaylistStore()
     private let nowPlaying = NowPlayingController()
 
     /// Shared setup for both platforms: wire up the system now-playing bridge,
@@ -16,6 +17,7 @@ struct AriaApp: App {
             .environmentObject(library)
             .environmentObject(player)
             .environmentObject(palettes)
+            .environmentObject(playlists)
             .task {
                 nowPlaying.attach(to: player)
                 await library.scan()
@@ -25,6 +27,7 @@ struct AriaApp: App {
             .environmentObject(library)
             .environmentObject(player)
             .environmentObject(palettes)
+            .environmentObject(playlists)
             .frame(minWidth: 1000, minHeight: 660)
             .task {
                 nowPlaying.attach(to: player)
@@ -81,6 +84,7 @@ struct AriaApp: App {
             SettingsView()
                 .environmentObject(library)
                 .environmentObject(palettes)
+            .environmentObject(playlists)
                 .environmentObject(player)
                 .frame(width: 560, height: 620)
         }
