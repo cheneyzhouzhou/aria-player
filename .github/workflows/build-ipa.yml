@@ -1,0 +1,51 @@
+name: Build unsigned IPA
+
+# Builds Aria.ipa on a GitHub-hosted macOS runner, so no local Xcode is needed.
+# The IPA is unsigned: Sideloadly / AltStore re-sign it with your Apple ID.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Build for device (unsigned)
+        run: |
+          xcodebuild \
+            -project Aria.xcodeproj \
+            -scheme Aria \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build/dd \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package into Payload/Aria.app
+        run: |
+          APP="build/dd/Build/Products/Release-iphoneos/Aria.app"
+          test -d "$APP"
+          rm -rf build/Payload
+          mkdir -p build/Payload
+          cp -R "$APP" build/Payload/
+          # An unsigned device build still needs a code directory for most
+          # sideloading tools to re-sign it cleanly.
+          codesign --force --sign - --timestamp=none build/Payload/Aria.app || true
+          cd build && zip -qry Aria.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Aria-unsigned-ipa
+          path: build/Aria.ipa
+          if-no-files-found: error

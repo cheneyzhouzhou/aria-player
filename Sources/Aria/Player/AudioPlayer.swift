@@ -20,11 +20,34 @@ final class AudioPlayer: ObservableObject {
     @Published var isShuffled = false {
         didSet { rebuildOrder() }
     }
-    @Published var volume: Float = 0.8 {
+    /// Slider position, 0…1, read as a decibel fader rather than as a linear
+    /// multiplier. 1.0 is unity gain, 0.5 is −25 dB, 0 is silence.
+    ///
+    /// iOS's lowest system volume step is a fixed 1/16 of the hardware range,
+    /// which is still far too loud for sensitive in-ear monitors. A dB fader
+    /// lets the app go on attenuating below it, and spreads the useful range
+    /// over the whole slider instead of cramming it into the top few percent.
+    @Published var volume: Float = 1.0 {
         didSet {
-            engine.mainMixerNode.outputVolume = volume
+            engine.mainMixerNode.outputVolume = Self.gain(for: volume)
             UserDefaults.standard.set(volume, forKey: "volume")
+            UserDefaults.standard.set(Int(Self.decibels(for: volume).rounded()), forKey: "volumeDB")
         }
+    }
+
+    /// How far down the fader can go. −50 dB is quiet enough for any in-ear
+    /// on a phone whose bottom step is already too loud, and still leaves
+    /// headroom above pure silence for fine adjustment.
+    static let volumeFloorDB: Float = 50
+
+    static func decibels(for position: Float) -> Float {
+        -volumeFloorDB * (1 - max(0, min(1, position)))
+    }
+
+    static func gain(for position: Float) -> Float {
+        let p = max(0, min(1, position))
+        guard p > 0.0001 else { return 0 }
+        return powf(10, decibels(for: p) / 20)
     }
 
     private let engine = AVAudioEngine()
@@ -69,7 +92,7 @@ final class AudioPlayer: ObservableObject {
 
     init() {
         let saved = UserDefaults.standard.object(forKey: "volume") as? Float
-        volume = saved ?? 0.8
+        volume = saved ?? 1.0
 
         #if os(iOS)
         // Without this the app is silenced by the ringer switch and stops on
@@ -90,7 +113,7 @@ final class AudioPlayer: ObservableObject {
         }
         engine.connect(node, to: eq, format: nil)
         engine.connect(eq, to: engine.mainMixerNode, format: nil)
-        engine.mainMixerNode.outputVolume = volume
+        engine.mainMixerNode.outputVolume = Self.gain(for: volume)
 
         // Restore the saved curve before the first track is scheduled.
         if let saved = UserDefaults.standard.array(forKey: "eqGains") as? [Double],
