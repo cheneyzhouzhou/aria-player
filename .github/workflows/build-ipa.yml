@@ -1,12 +1,18 @@
-name: Build unsigned IPA
+name: Build Aria
 
-# Builds Aria.ipa on a GitHub-hosted macOS runner, so no local Xcode is needed.
-# The IPA is unsigned: Sideloadly / AltStore re-sign it with your Apple ID.
+# Builds Aria on a GitHub-hosted macOS runner, so no local Xcode is needed.
+# Every push produces downloadable build artifacts; pushing a tag like v29
+# additionally publishes a GitHub Release with the unsigned IPA and the
+# macOS app attached.
 
 on:
   workflow_dispatch:
   push:
     branches: [main, master]
+    tags: ['v*']
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -19,7 +25,7 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
-      - name: Build for device (unsigned)
+      - name: Build iOS app for device (unsigned)
         run: |
           xcodebuild \
             -project Aria.xcodeproj \
@@ -32,7 +38,7 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             build
 
-      - name: Package into Payload/Aria.app
+      - name: Package iOS app into an unsigned IPA
         run: |
           APP="build/dd/Build/Products/Release-iphoneos/Aria.app"
           test -d "$APP"
@@ -44,8 +50,50 @@ jobs:
           codesign --force --sign - --timestamp=none build/Payload/Aria.app || true
           cd build && zip -qry Aria.ipa Payload
 
+      - name: Build macOS app
+        run: |
+          swift build -c release --disable-sandbox
+          APP="build/Aria.app"
+          rm -rf "$APP"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp .build/release/Aria "$APP/Contents/MacOS/Aria"
+          cp Resources/Info.plist "$APP/Contents/Info.plist"
+          # The icon is generated on the runner (it is not committed).
+          if [ ! -f Resources/AppIcon.icns ]; then
+            swift Tools/MakeIcon.swift Resources/AppIcon.png >/dev/null
+            ICONSET=$(mktemp -d)/AppIcon.iconset
+            mkdir -p "$ICONSET"
+            for s in 16 32 128 256 512; do
+              sips -z $s $s Resources/AppIcon.png --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
+              sips -z $((s*2)) $((s*2)) Resources/AppIcon.png --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
+            done
+            iconutil -c icns "$ICONSET" -o Resources/AppIcon.icns
+          fi
+          cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+          codesign --force --sign - --timestamp=none "$APP" || true
+          ditto -c -k --sequesterRsrc --keepParent "$APP" build/Aria-macOS.zip
+
       - uses: actions/upload-artifact@v4
         with:
           name: Aria-unsigned-ipa
           path: build/Aria.ipa
           if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Aria-macOS
+          path: build/Aria-macOS.zip
+          if-no-files-found: error
+
+      - name: Publish release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          gh release create "$TAG" \
+            build/Aria.ipa#Aria-${TAG}.ipa \
+            build/Aria-macOS.zip#Aria-${TAG}-macOS.zip \
+            --title "Aria ${TAG}" \
+            --generate-notes \
+            || gh release upload "$TAG" build/Aria.ipa build/Aria-macOS.zip --clobber
