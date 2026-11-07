@@ -33,6 +33,47 @@ extension PlatformImage {
         return cgImage
         #endif
     }
+
+    /// A copy whose longest side is at most `maxSide` points. The lock screen
+    /// keeps its own copy of whatever artwork it is handed, so a 3000px sleeve
+    /// would otherwise be carried around for the rest of the session.
+    ///
+    /// Call this on the main thread: both backends draw through AppKit/UIKit.
+    func scaled(maxSide: CGFloat) -> PlatformImage {
+        let size = self.size
+        let longest = max(size.width, size.height)
+        guard longest > maxSide, longest > 0, let source = cgImageRef else { return self }
+        let factor = maxSide / longest
+        let target = CGSize(width: (size.width * factor).rounded(),
+                            height: (size.height * factor).rounded())
+        #if os(macOS)
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil,
+                                   pixelsWide: Int(target.width),
+                                   pixelsHigh: Int(target.height),
+                                   bitsPerSample: 8, samplesPerPixel: 4,
+                                   hasAlpha: true, isPlanar: false,
+                                   colorSpaceName: .deviceRGB,
+                                   bytesPerRow: 0, bitsPerPixel: 0)
+        guard let rep else { return self }
+        rep.size = target
+        if let context = NSGraphicsContext(bitmapImageRep: rep) {
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = context
+            context.imageInterpolation = .high
+            context.cgContext.draw(source, in: CGRect(origin: .zero, size: target))
+            NSGraphicsContext.restoreGraphicsState()
+        }
+        let out = NSImage(size: target)
+        out.addRepresentation(rep)
+        return out
+        #else
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: target, format: format).image { context in
+            context.cgContext.draw(source, in: CGRect(origin: .zero, size: target))
+        }
+        #endif
+    }
 }
 
 // MARK: - System integration

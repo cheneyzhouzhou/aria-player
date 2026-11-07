@@ -27,7 +27,7 @@ struct PlaylistListView: View {
                     Button {
                         showingNew = true
                     } label: {
-                        Label("New playlist", systemImage: "plus")
+                        Label(L("New playlist"), systemImage: "plus")
                     }
                     .buttonStyle(PillButtonStyle(
                         kind: .tonal, palette: palette,
@@ -37,7 +37,7 @@ struct PlaylistListView: View {
                         let added = playlistStore.importFolders(from: library.tracks, root: library.rootPath)
                         if added == 0 { /* nothing new to add */ }
                     } label: {
-                        Label("Import folders", systemImage: "folder.badge.plus")
+                        Label(L("Import folders"), systemImage: "folder.badge.plus")
                     }
                     .buttonStyle(PillButtonStyle(
                         kind: .text, palette: palette,
@@ -48,10 +48,10 @@ struct PlaylistListView: View {
 
                 if playlists.isEmpty {
                     VStack(spacing: 8) {
-                        Text("No playlists yet")
+                        Text(L("No playlists yet"))
                             .font(.body(14, .medium))
                             .foregroundStyle(palette.onSurface)
-                        Text("“Import folders” makes one playlist per top-level folder in your library.")
+                        Text(L("“Import folders” makes one playlist per top-level folder in your library."))
                             .font(.body(12))
                             .foregroundStyle(palette.onSurfaceVariant)
                             .multilineTextAlignment(.center)
@@ -71,10 +71,10 @@ struct PlaylistListView: View {
             .padding(.bottom, playerClearance)
         }
         .scrollContentBackground(.hidden)
-        .alert("New playlist", isPresented: $showingNew) {
-            TextField("Name", text: $newName)
-            Button("Cancel", role: .cancel) { newName = "" }
-            Button("Create") {
+        .alert(L("New playlist"), isPresented: $showingNew) {
+            TextField(L("Name"), text: $newName)
+            Button(L("Cancel"), role: .cancel) { newName = "" }
+            Button(L("Create")) {
                 let name = newName.trimmingCharacters(in: .whitespaces)
                 if !name.isEmpty {
                     playlistStore.create(named: name, root: library.rootPath)
@@ -131,9 +131,9 @@ struct PlaylistCard: View {
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(plural(tracks.count, "song"))
-                    .font(.body(11.5))
-                    .foregroundStyle(palette.onSurfaceVariant)
+            Text(Lplural(tracks.count, "song"))
+                .font(.body(11.5))
+                .foregroundStyle(palette.onSurfaceVariant)
             }
             .frame(height: 48, alignment: .topLeading)
             .padding(.horizontal, 2)
@@ -143,10 +143,10 @@ struct PlaylistCard: View {
         .onHover { isHovering = $0 }
         .animation(.snappy(duration: 0.22), value: isHovering)
         .contextMenu {
-            Button("Play") { player.playAll(tracks) }
-            Button("Shuffle") { player.playAll(tracks, shuffled: true) }
+            Button(L("Play")) { player.playAll(tracks) }
+            Button(L("Shuffle")) { player.playAll(tracks, shuffled: true) }
             Divider()
-            Button("Delete", role: .destructive) { playlistStore.delete(playlist) }
+            Button(L("Delete"), role: .destructive) { playlistStore.delete(playlist) }
         }
     }
 }
@@ -159,7 +159,7 @@ struct PlaylistMosaic: View {
     private var covers: [Track] {
         var seen = Set<String>()
         var out: [Track] = []
-        for track in tracks where track.artRange != nil {
+        for track in tracks where track.hasArtwork {
             if seen.insert(track.albumKey).inserted { out.append(track) }
             if out.count == 4 { break }
         }
@@ -234,7 +234,7 @@ struct PlaylistDetailView: View {
                             .contextMenu {
                                 TrackMenu(track: track, context: tracks)
                                 Divider()
-                                Button("Remove from playlist", role: .destructive) {
+                                Button(L("Remove from playlist"), role: .destructive) {
                                     playlistStore.remove(track, from: playlist, root: library.rootPath)
                                 }
                             }
@@ -246,10 +246,10 @@ struct PlaylistDetailView: View {
             .padding(.bottom, playerClearance)
         }
         .scrollContentBackground(.hidden)
-        .alert("Rename playlist", isPresented: $renaming) {
-            TextField("Name", text: $draftName)
-            Button("Cancel", role: .cancel) {}
-            Button("Save") {
+        .alert(L("Rename playlist"), isPresented: $renaming) {
+            TextField(L("Name"), text: $draftName)
+            Button(L("Cancel"), role: .cancel) {}
+            Button(L("Save")) {
                 let name = draftName.trimmingCharacters(in: .whitespaces)
                 if !name.isEmpty { playlistStore.rename(playlist, to: name) }
             }
@@ -293,8 +293,8 @@ struct PlaylistDetailView: View {
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text(plural(tracks.count, "song") + " · "
-                 + formatDurationLong(tracks.reduce(0) { $0 + $1.duration }))
+            Text(Lplural(tracks.count, "song") + " · "
+                 + Lduration(tracks.reduce(0) { $0 + $1.duration }))
                 .font(.body(12))
                 .foregroundStyle(palette.onSurfaceVariant)
         }
@@ -303,12 +303,12 @@ struct PlaylistDetailView: View {
     private var actions: some View {
         HStack(spacing: 10) {
             Button { player.playAll(tracks) } label: {
-                Label("Play", systemImage: "play.fill")
+                Label(L("Play"), systemImage: "play.fill")
             }
             .buttonStyle(PillButtonStyle(kind: .filled, palette: palette))
 
             Button { player.playAll(tracks, shuffled: true) } label: {
-                Label("Shuffle", systemImage: "shuffle")
+                Label(L("Shuffle"), systemImage: "shuffle")
             }
             .buttonStyle(PillButtonStyle(kind: .tonal, palette: palette))
 

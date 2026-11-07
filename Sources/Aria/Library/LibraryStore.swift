@@ -5,16 +5,65 @@ import SwiftUI
 final class LibraryStore: ObservableObject {
     @Published private(set) var tracks: [Track] = []
     @Published private(set) var isScanning = false
-    @Published var rootPath: String {
-        didSet {
-            UserDefaults.standard.set(rootPath, forKey: Self.rootKey)
+
+    /// Every folder the library reads from, in the order they were added.
+    @Published private(set) var sources: [LibrarySource] {
+        didSet { Self.saveSources(sources) }
+    }
+
+    /// The first folder. Kept for the places that still speak of a single
+    /// path — the macOS panel, the window title. Setting it replaces that
+    /// first source rather than adding another.
+    var rootPath: String {
+        get { sources.first?.path ?? Self.defaultRoot }
+        set {
+            let url = URL(fileURLWithPath: newValue)
+            let bookmark = LibrarySource.bookmark(for: url)
+            if let first = sources.first {
+                sources[0] = LibrarySource(id: first.id, path: newValue, bookmark: bookmark)
+            } else {
+                sources = [LibrarySource(path: newValue, bookmark: bookmark)]
+            }
+            retainScope(url, for: sources[0].id)
         }
     }
+
+    /// Where the folder picker should open. The last folder the user added is
+    /// the best guess for the next one, and it spares them the Browse tab.
+    var pickerStartDirectory: URL? {
+        guard let last = sources.last else { return nil }
+        return openScopes[last.id] ?? URL(fileURLWithPath: last.path)
+    }
+
+    /// How many tracks a folder actually contributed. Shown beside it, so a
+    /// folder that was added but held no playable files is visible rather than
+    /// silent.
+    func trackCount(in source: LibrarySource) -> Int {
+        let root = Self.samePathForm(source.path)
+        let folder = root.hasSuffix("/") ? root : root + "/"
+        return tracks.filter {
+            let path = Self.samePathForm($0.url.path)
+            return path == root || path.hasPrefix(folder)
+        }.count
+    }
+
+    /// `/var/mobile/…` and `/private/var/mobile/…` are the same folder, and the
+    /// two get mixed freely: the document picker hands out the `/private` form
+    /// while the file system reports the short one. Comparing the raw strings
+    /// made a folder that had just scanned 263 tracks report "no music here".
+    nonisolated static func samePathForm(_ path: String) -> String {
+        path.hasPrefix("/private/") ? String(path.dropFirst("/private".count)) : path
+    }
+
+    /// Security scopes held open for the life of the app: playback and artwork
+    /// read from these folders long after the scan that found them finished.
+    private var openScopes: [UUID: URL] = [:]
 
     /// When the library last finished a scan — shown next to the rescan button.
     @Published private(set) var lastScan: Date?
 
-    private static let rootKey = "libraryRoot"
+    private static let sourcesKey = "librarySources"
+    private static let legacyRootKey = "libraryRoot"
     private static let lastScanKey = "lastScanDate"
 
     private static var defaultRoot: String {
@@ -27,9 +76,167 @@ final class LibraryStore: ObservableObject {
     }
 
     init() {
-        rootPath = UserDefaults.standard.string(forKey: Self.rootKey) ?? Self.defaultRoot
+        sources = Self.loadSources()
         lastScan = UserDefaults.standard.object(forKey: Self.lastScanKey) as? Date
         tracks = Self.loadCache()
+        // Take the scopes before anything tries to read artwork or audio.
+        for source in sources { retainScope(Self.resolve(source), for: source.id) }
+    }
+
+    // MARK: - Sources
+
+    /// Adds a folder the user picked. The URL comes from the document picker,
+    /// so its security scope is still open — it is turned into a bookmark here
+    /// and held for as long as the app runs.
+    /// Adds a folder the user picked.
+    ///
+    /// Taking the security scope and writing the bookmark both talk to the file
+    /// provider. On a folder holding hundreds of files that takes long enough
+    /// to stall the main thread — which is exactly where the document picker is
+    /// still finishing its dismissal, so the sheet freezes on its Open button
+    /// and never comes back. Hence the detached task: the picker closes first
+    /// and the folder is registered right after.
+    @discardableResult
+    func addSource(_ url: URL) async -> Bool {
+        let standardized = url.standardizedFileURL
+        let path = standardized.path
+        let canonical = Self.samePathForm(path)
+        guard !sources.contains(where: { Self.samePathForm($0.path) == canonical }) else { return false }
+        let prepared = await Task.detached(priority: .userInitiated) { () -> LibrarySource in
+            var source = LibrarySource(path: path)
+            // False for a folder already inside the container, which needs none.
+            guard standardized.startAccessingSecurityScopedResource() else { return source }
+            source.bookmark = LibrarySource.bookmark(for: standardized)
+            return source
+        }.value
+        openScopes[prepared.id] = standardized
+        sources.append(prepared)
+        return true
+    }
+
+    /// Moves a folder the picker copied into the app into Documents.
+    ///
+    /// Import mode hands back a URL inside the container, often in `tmp`, which
+    /// the system is free to purge. Documents is the folder Aria shows in Files
+    /// (UIFileSharingEnabled), so a copy parked there is both durable and
+    /// visible if the user wants the space back.
+    nonisolated static func adoptCopy(_ url: URL) -> URL? {
+        let fm = FileManager.default
+        let docs = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+            .appendingPathComponent("Documents", isDirectory: true)
+        let normalised = url.standardizedFileURL
+        // Import mode hands back something inside the app container. If it did
+        // not, the system quietly fell back to in-place access — and "moving"
+        // that would move the user's own folder out of On My iPhone. Refuse.
+        guard normalised.path.hasPrefix(NSHomeDirectory() + "/") else { return nil }
+        if normalised.path.hasPrefix(docs.standardizedFileURL.path + "/") { return normalised }
+
+        try? fm.createDirectory(at: docs, withIntermediateDirectories: true)
+        let name = normalised.lastPathComponent.isEmpty ? "Imported" : normalised.lastPathComponent
+        var destination = docs.appendingPathComponent(name)
+        var counter = 2
+        while fm.fileExists(atPath: destination.path) {
+            destination = docs.appendingPathComponent("\(name) \(counter)")
+            counter += 1
+        }
+        do {
+            try fm.moveItem(at: normalised, to: destination)
+        } catch {
+            guard (try? fm.copyItem(at: normalised, to: destination)) != nil else { return nil }
+            try? fm.removeItem(at: normalised)
+        }
+        return destination
+    }
+
+    /// Registers a folder the picker already prepared. The security scope is
+    /// taken in the picker's callback, so there is nothing left to wait for
+    /// here — the source becomes readable the moment it is added.
+    @discardableResult
+    func addPrepared(_ folder: PickedFolder) -> Bool {
+        let path = folder.path
+        let canonical = Self.samePathForm(path)
+        guard !sources.contains(where: { Self.samePathForm($0.path) == canonical }) else { return false }
+        let source = LibrarySource(path: path, name: folder.name, bookmark: folder.bookmark)
+        if folder.holdsScope { openScopes[source.id] = folder.url }
+        sources.append(source)
+        return true
+    }
+
+    /// Removes a folder and forgets the tracks that came from it, so the list
+    /// matches the folders without waiting for a rescan.
+    func removeSource(id: UUID) {
+        guard let index = sources.firstIndex(where: { $0.id == id }) else { return }
+        let removed = sources.remove(at: index)
+        if let url = openScopes.removeValue(forKey: id) {
+            url.stopAccessingSecurityScopedResource()
+        }
+        let root = Self.samePathForm(removed.path)
+        let folder = root.hasSuffix("/") ? root : root + "/"
+        tracks.removeAll {
+            let path = Self.samePathForm($0.url.path)
+            return path == root || path.hasPrefix(folder)
+        }
+    }
+
+    /// Turns a source back into a URL. A bookmark survives the folder being
+    /// moved, and on iOS it is the only way back into a folder outside the
+    /// app's own container.
+    private static func resolve(_ source: LibrarySource) -> URL {
+        if let bookmark = source.bookmark {
+            var stale = false
+            if let url = try? URL(resolvingBookmarkData: bookmark, options: [],
+                                  relativeTo: nil, bookmarkDataIsStale: &stale) {
+                return url
+            }
+        }
+        return URL(fileURLWithPath: source.path)
+    }
+
+    private func retainScope(_ url: URL, for id: UUID) {
+        guard openScopes[id] == nil else { return }
+        // Returns false for folders inside the container, which need no scope.
+        _ = url.startAccessingSecurityScopedResource()
+        openScopes[id] = url
+    }
+
+    private static func loadSources() -> [LibrarySource] {
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: sourcesKey),
+           let decoded = try? JSONDecoder().decode([LibrarySource].self, from: data) {
+            return decoded.map(rebasedOntoCurrentContainer)
+        }
+        // Builds before this stored a single path.
+        if let legacy = defaults.string(forKey: legacyRootKey), !legacy.isEmpty {
+            return [rebasedOntoCurrentContainer(LibrarySource(path: legacy))]
+        }
+        return [LibrarySource(path: defaultRoot, name: "On My iPhone")]
+    }
+
+    /// A folder inside the app container is stored as an absolute path, and
+    /// that path carries the container's UUID — which iOS changes when the app
+    /// is reinstalled. The saved source then points at a container that no
+    /// longer exists, so the library looks empty until the folder is added
+    /// again. Anything under *an* app container is re-anchored onto this one.
+    private static func rebasedOntoCurrentContainer(_ source: LibrarySource) -> LibrarySource {
+        let home = NSHomeDirectory()
+        guard !source.path.hasPrefix(home),
+              let anchor = source.path.range(of: "/Containers/Data/Application/") else { return source }
+        let rest = source.path[anchor.upperBound...]        // <UUID>/Documents/…
+        var fixed = source
+        if let slash = rest.firstIndex(of: "/") {
+            fixed.path = home + rest[slash...]
+        } else {
+            // The source *is* the container root — there is nothing after the
+            // UUID to keep, and the bookmark points into the old container too.
+            fixed.path = home
+        }
+        fixed.bookmark = nil
+        return fixed
+    }
+
+    private static func saveSources(_ sources: [LibrarySource]) {
+        guard let data = try? JSONEncoder().encode(sources) else { return }
+        UserDefaults.standard.set(data, forKey: sourcesKey)
     }
 
     // MARK: - Derived collections
@@ -59,8 +266,48 @@ final class LibraryStore: ObservableObject {
     func scan() async {
         guard !isScanning else { return }
         isScanning = true
-        let root = rootPath
-        let urls = await Task.detached(priority: .userInitiated) { Self.flacURLs(under: root) }.value
+        // Folders whose scope is held are read through the resolved URL; the
+        // rest (the app's own container) are plain paths. A folder added before
+        // the scope could be taken — or one whose bookmark was made while a
+        // provider was offline — gets another attempt here, because enumerating
+        // a bare path into an unopened provider quietly yields nothing.
+        var roots: [String] = []
+        var refused: [String] = []
+        for source in sources {
+            if let held = openScopes[source.id] {
+                roots.append(held.path)
+                continue
+            }
+            let url = Self.resolve(source)
+            if url.startAccessingSecurityScopedResource() {
+                openScopes[source.id] = url
+            } else if !source.path.hasPrefix(NSHomeDirectory()) {
+                // Outside the container and the system said no: enumerating the
+                // bare path would just return nothing, with no clue why.
+                refused.append(source.path)
+            }
+            roots.append(url.path)
+        }
+        let scans = await Task.detached(priority: .userInitiated) {
+            roots.map { path -> (String, [URL], String?) in
+                let result = Self.audioScan(under: path)
+                return (path, result.urls, result.failure)
+            }
+        }.value
+
+        var urls: [URL] = []
+        for (path, found, failure) in scans {
+            urls.append(contentsOf: found)
+            #if os(iOS)
+            if let failure = failure { PickerLog.shared.note("cannot read \(path): \(failure)") }
+            #endif
+        }
+        #if os(iOS)
+        PickerLog.shared.note("scan: \(roots.count) folder\(roots.count == 1 ? "" : "s") → \(urls.count) playable")
+        for path in refused.prefix(2) {
+            PickerLog.shared.note("no permission for \(path)")
+        }
+        #endif
         let found = Self.deduplicate(await Self.parseHeaders(of: urls))
         // Preserve the original dateAdded for files already known, so a rescan
         // doesn't reshuffle "Recently Added".
@@ -76,15 +323,26 @@ final class LibraryStore: ObservableObject {
         Self.saveCache(tracks)
     }
 
-    /// Walks the tree collecting .flac files.
-    nonisolated private static func flacURLs(under path: String) -> [URL] {
+    /// Walks the tree collecting every playable file, and says why when it can't.
+    ///
+    /// A folder the app has no permission for (no security scope, provider
+    /// offline) enumerates as empty rather than throwing, which reads as "this
+    /// folder has no music". Reading the directory first turns that into a
+    /// concrete error message.
+    nonisolated private static func audioScan(under path: String) -> (urls: [URL], failure: String?) {
         let root = URL(fileURLWithPath: path)
         let fm = FileManager.default
+        do {
+            _ = try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil,
+                                           options: [.skipsHiddenFiles])
+        } catch {
+            return ([], (error as NSError).localizedDescription)
+        }
         guard let walker = fm.enumerator(
             at: root,
             includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else { return [] }
+        ) else { return ([], "cannot enumerate this folder") }
 
         var urls: [URL] = []
         for case let url as URL in walker {
@@ -93,9 +351,9 @@ final class LibraryStore: ObservableObject {
                 walker.skipDescendants()
                 continue
             }
-            if url.pathExtension.lowercased() == "flac" { urls.append(url) }
+            if AudioFormat.isSupported(url) { urls.append(url) }
         }
-        return urls
+        return (urls, nil)
     }
 
     /// Parsing headers is I/O bound, so fan it out. A task group keeps this
@@ -104,7 +362,10 @@ final class LibraryStore: ObservableObject {
     nonisolated private static func parseHeaders(of urls: [URL]) async -> [Track] {
         await withTaskGroup(of: (Int, Track?).self) { group in
             for (index, url) in urls.enumerated() {
-                group.addTask(priority: .userInitiated) { (index, Track.load(from: url)) }
+                group.addTask(priority: .userInitiated) {
+                    let track = await Track.load(from: url)
+                    return (index, track)
+                }
             }
             var results = [Track?](repeating: nil, count: urls.count)
             for await (index, track) in group { results[index] = track }
@@ -144,6 +405,8 @@ final class LibraryStore: ObservableObject {
             let suffix = stem[stem.index(after: underscore)...]
             return suffix.count == 2 && suffix.allSatisfy(\.isNumber)
         }
+        // Same recording in two formats: the lossless copy is the keeper.
+        if lhs.format.isLossless != rhs.format.isLossless { return lhs.format.isLossless }
         if isCopy(lhs) != isCopy(rhs) { return !isCopy(lhs) }
         return lhs.url.path < rhs.url.path
     }

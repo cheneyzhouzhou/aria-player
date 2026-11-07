@@ -27,6 +27,36 @@ A repeated key (several `ARTIST` lines) is joined with commas for display, but o
 **first** value is kept for grouping. Otherwise a track credited to "Lead, Feature" files
 itself under a different artist than the rest of the album.
 
+## Reading everything else
+
+`Models/AudioMetadata.swift` dispatches on the container: FLAC goes to the hand-written
+parser above, and MP3, M4A, WAV, AIFF and CAF go to AVFoundation. Two things drove that
+split.
+
+**Vorbis comments are still FLAC-only.** AVFoundation exposes FLAC's tags as metadata
+items, but the hand-written reader is cheaper and gives the exact bit depth, which the
+system reports as 0 for every compressed stream.
+
+**The extension lies about the codec.** An `.m4a` is either ALAC or AAC, and only one of
+them is lossless. The format therefore comes from the *media subtype* of the file's first
+audio track (`kAudioFormatAppleLossless` vs `kAudioFormatMPEG4AAC`), not from its name.
+ALAC also needs one extra step: its word length lives in the magic cookie, inside the
+`alac` box, thirteen bytes past the box type — the stream description reports 0 there too.
+
+Tags are mapped onto the same `TITLE` / `ARTIST` / `ALBUMARTIST` / … dictionary the Vorbis
+reader produces, so `Track` has no per-container branching. The mapping keys off
+`AVMetadataItem.identifier` (`id3/TPE2`, `itsk/aART`) because iTunes atom keys come back as
+integers, and falls back to `commonKey` for containers with no identifier mapping. Two
+details are easy to get wrong: `trkn` and `disk` are big-endian byte pairs rather than
+text, and ID3's `TDAT` (day/month) maps to the same `commonKeyCreationDate` as `TDRC`, so a
+year is only accepted when it reads as 1900–2100.
+
+Cover art is located differently per container. FLAC records the picture's byte range
+during the scan and reads only those bytes later. The other containers hand the picture to
+`AVMetadataItem.dataValue`, which is loaded once per album, on demand, rather than during
+the scan — a 500-track MP3 library would otherwise pull hundreds of megabytes of JPEG
+through memory just to fill a grid.
+
 ## Scanning
 
 `LibraryStore` walks the tree, then parses headers concurrently with a `TaskGroup`. Results

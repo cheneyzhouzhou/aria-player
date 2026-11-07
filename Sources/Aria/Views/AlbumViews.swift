@@ -154,8 +154,8 @@ struct AlbumDetailView: View {
                 .font(.body(15, .medium))
                 .foregroundStyle(palette.primary)
 
-            Text([album.year, plural(album.tracks.count, "song"),
-                  formatDurationLong(album.duration),
+            Text([album.year, Lplural(album.tracks.count, "song"),
+                  Lduration(album.duration),
                   album.tracks.first?.qualityLabel ?? ""]
                     .filter { !$0.isEmpty }
                     .joined(separator: "  ·  "))
@@ -167,12 +167,12 @@ struct AlbumDetailView: View {
     private var actions: some View {
         HStack(spacing: 10) {
             Button { player.playAll(album.tracks) } label: {
-                Label("Play", systemImage: "play.fill")
+                Label(L("Play"), systemImage: "play.fill")
             }
             .buttonStyle(PillButtonStyle(kind: .filled, palette: palette))
 
             Button { player.playAll(album.tracks, shuffled: true) } label: {
-                Label("Shuffle", systemImage: "shuffle")
+                Label(L("Shuffle"), systemImage: "shuffle")
             }
             .buttonStyle(PillButtonStyle(kind: .tonal, palette: palette))
         }
@@ -219,7 +219,7 @@ private struct ArtistRow: View {
                     .font(.body(14, .semibold))
                     .foregroundStyle(palette.onSurface)
                     .lineLimit(1)
-                Text(plural(artist.albums.count, "album") + " · " + plural(artist.trackCount, "song"))
+                Text(Lplural(artist.albums.count, "album") + " · " + Lplural(artist.trackCount, "song"))
                     .font(.body(12))
                     .foregroundStyle(palette.onSurfaceVariant)
             }
@@ -295,7 +295,7 @@ struct ArtistDetailView: View {
                 .font(.display(30, .semibold))
                 .foregroundStyle(palette.onSurface)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(plural(artist.albums.count, "album") + " · " + plural(artist.trackCount, "song"))
+            Text(Lplural(artist.albums.count, "album") + " · " + Lplural(artist.trackCount, "song"))
                 .font(.body(12))
                 .foregroundStyle(palette.onSurfaceVariant)
         }
@@ -304,12 +304,12 @@ struct ArtistDetailView: View {
     private var artistActions: some View {
         HStack(spacing: 10) {
             Button { player.playAll(allTracks) } label: {
-                Label("Play", systemImage: "play.fill")
+                Label(L("Play"), systemImage: "play.fill")
             }
             .buttonStyle(PillButtonStyle(kind: .filled, palette: palette))
 
             Button { player.playAll(allTracks, shuffled: true) } label: {
-                Label("Shuffle", systemImage: "shuffle")
+                Label(L("Shuffle"), systemImage: "shuffle")
             }
             .buttonStyle(PillButtonStyle(kind: .tonal, palette: palette))
         }

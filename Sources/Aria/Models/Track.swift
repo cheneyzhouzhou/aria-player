@@ -19,6 +19,16 @@ struct Track: Identifiable, Hashable, Codable {
     var dateAdded: Date
     var artOffset: UInt64?
     var artLength: Int?
+    /// The codec, when it had to be asked for rather than inferred from the file
+    /// name — an `.m4a` may be ALAC or AAC. Persisted so a library cached before
+    /// the format existed is labelled correctly without a rescan.
+    var codec: String?
+    /// The file carries a picture, but the scan did not locate its byte range.
+    /// Those covers are decoded on demand through AVFoundation instead.
+    var hasEmbeddedArt: Bool?
+    /// Lyrics carried in the file's tags, if any. A `.lrc` beside the file wins
+    /// over this — see `Lyrics.load(for:)`.
+    var lyrics: String?
 
     /// Albums are keyed by album artist + title so two soundtracks sharing a
     /// name don't collapse into one.
@@ -29,17 +39,28 @@ struct Track: Identifiable, Hashable, Codable {
         return offset..<(offset + UInt64(length))
     }
 
+    /// What the file actually is, not what its extension suggests.
+    var format: AudioFormat {
+        codec.flatMap(AudioFormat.init(rawValue:)) ?? AudioFormat.inferred(from: url)
+    }
+
+    var hasArtwork: Bool { artRange != nil || hasEmbeddedArt == true }
+
     /// Average bitrate in kbps, derived from file size and duration.
     var bitrate: Int {
         duration > 0 ? Int(Double(fileSize) * 8 / duration / 1000) : 0
     }
 
     var qualityLabel: String {
-        "\(bitDepth)-bit · \(String(format: "%.1f", Double(sampleRate) / 1000)) kHz"
+        let rate = String(format: "%.1f", Double(sampleRate) / 1000)
+        // Lossy codecs have no sample word length, so the bitrate is the number
+        // worth showing instead of a misleading "0-bit".
+        if bitDepth > 0 { return "\(bitDepth)-bit · \(rate) kHz" }
+        return bitrate > 0 ? "\(bitrate) kbps · \(rate) kHz" : "\(rate) kHz"
     }
 
-    static func load(from url: URL) -> Track? {
-        guard let info = FLACMetadata.read(at: url) else { return nil }
+    static func load(from url: URL) async -> Track? {
+        guard let info = await AudioMetadata.read(at: url) else { return nil }
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         let tags = info.tags
 
@@ -58,7 +79,7 @@ struct Track: Identifiable, Hashable, Codable {
             return nil
         }
 
-        // Tags win; fall back to the Artist/Album/Track.flac folder layout.
+        // Tags win; fall back to the Artist/Album/Track folder layout.
         let parent = url.deletingLastPathComponent()
         let folderAlbum = parent.lastPathComponent
         let folderArtist = parent.deletingLastPathComponent().lastPathComponent
@@ -86,7 +107,10 @@ struct Track: Identifiable, Hashable, Codable {
             fileSize: (attrs?[.size] as? NSNumber)?.int64Value ?? 0,
             dateAdded: (attrs?[.creationDate] as? Date) ?? .distantPast,
             artOffset: info.pictureRange?.lowerBound,
-            artLength: info.pictureRange.map { Int($0.upperBound - $0.lowerBound) }
+            artLength: info.pictureRange.map { Int($0.upperBound - $0.lowerBound) },
+            codec: info.format.rawValue,
+            hasEmbeddedArt: info.hasPicture && info.pictureRange == nil ? true : nil,
+            lyrics: tag("LYRICS", "UNSYNCEDLYRICS", "UNSYNCED LYRICS", "LYRIC")
         )
     }
 }
@@ -100,7 +124,7 @@ struct Album: Identifiable, Hashable {
 
     var duration: Double { tracks.reduce(0) { $0 + $1.duration } }
     /// The track whose embedded picture represents the album.
-    var artworkTrack: Track? { tracks.first { $0.artRange != nil } }
+    var artworkTrack: Track? { tracks.first { $0.hasArtwork } }
 }
 
 struct Artist: Identifiable, Hashable {

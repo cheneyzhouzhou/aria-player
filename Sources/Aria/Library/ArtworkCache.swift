@@ -1,7 +1,7 @@
 import Foundation
 import SwiftUI
 
-/// Decodes embedded FLAC cover art on demand and keeps the results in memory.
+/// Decodes embedded cover art on demand and keeps the results in memory.
 ///
 /// Art is keyed by album rather than track, so a 12-track album decodes one image.
 final class ArtworkCache {
@@ -11,6 +11,11 @@ final class ArtworkCache {
     private let queue = DispatchQueue(label: "aria.artwork", qos: .userInitiated, attributes: .concurrent)
     private let lock = NSLock()
     private var inFlight = Set<String>()
+    /// Callbacks waiting on a decode that is already running. They are served
+    /// with the real image when it lands — the old code looked in the cache
+    /// 0.15s later and usually found nothing, so a second caller (the lock
+    /// screen, for one) never got any art at all.
+    private var waiters: [String: [(PlatformImage?) -> Void]] = [:]
 
     private init() {
         cache.countLimit = 400
@@ -26,37 +31,41 @@ final class ArtworkCache {
             completion(hit)
             return
         }
-        guard let range = track.artRange else {
+        guard track.hasArtwork else {
             completion(nil)
             return
         }
 
-        lock.lock()
-        let alreadyLoading = inFlight.contains(key)
-        if !alreadyLoading { inFlight.insert(key) }
-        lock.unlock()
-
-        // A duplicate request for art already being decoded resolves on the next
-        // cache hit rather than decoding the same JPEG twice.
-        if alreadyLoading {
-            queue.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-                let image = self?.cached(for: key)
-                DispatchQueue.main.async { completion(image) }
-            }
-            return
+        let startsDecode = lock.withLock { () -> Bool in
+            waiters[key, default: []].append(completion)
+            return inFlight.insert(key).inserted
         }
+        // Somebody else is already decoding this album: our completion is
+        // queued with theirs and will be called with the same image.
+        guard startsDecode else { return }
 
         let url = track.url
-        queue.async { [weak self] in
+        let range = track.artRange
+        Task.detached(priority: .userInitiated) { [weak self] in
             var image: PlatformImage?
-            if let data = FLACMetadata.pictureData(at: url, range: range) {
+            if let range {
+                // FLAC records where the picture lives, so only those bytes move.
+                if let data = FLACMetadata.pictureData(at: url, range: range) {
+                    image = PlatformImage.decode(data)
+                }
+            } else if let data = await AudioMetadata.artworkData(at: url) {
+                // MP3, M4A, WAV and AIFF hand the picture to AVFoundation; it is
+                // read here, once per album, rather than during the scan.
                 image = PlatformImage.decode(data)
             }
             if let image { self?.cache.setObject(image, forKey: key as NSString) }
-            self?.lock.lock()
-            self?.inFlight.remove(key)
-            self?.lock.unlock()
-            DispatchQueue.main.async { completion(image) }
+            let pending = self?.lock.withLock { () -> [(PlatformImage?) -> Void] in
+                self?.inFlight.remove(key)
+                return self?.waiters.removeValue(forKey: key) ?? []
+            } ?? []
+            for waiter in pending {
+                DispatchQueue.main.async { waiter(image) }
+            }
         }
     }
 }

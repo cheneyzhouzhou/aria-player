@@ -1,4 +1,8 @@
 import SwiftUI
+import UniformTypeIdentifiers
+#if os(iOS)
+import UIKit
+#endif
 
 struct SettingsView: View {
     /// Supplied when hosted inside the main window; computed for the ⌘, window.
@@ -7,7 +11,70 @@ struct SettingsView: View {
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var palettes: PaletteStore
     @EnvironmentObject var player: AudioPlayer
+    @StateObject private var lang = LanguageSettings.shared
     @Environment(\.colorScheme) private var scheme
+
+    /// A folder that was picked but holds no playable file. It is held here so the
+    /// warning can say which one, instead of the folder quietly joining the
+    /// list with "0 tracks" beside it.
+    @State private var emptyFolder: PickedFolder?
+    /// Set when the folder could not be opened at all. The distinction matters:
+    /// "no music here" and "the system won't let me look" need different fixes.
+    @State private var readProblem: String?
+
+    /// iOS goes through the document picker; the Mac's own panel already
+    /// returns a folder the app may read.
+    private func addFolder() {
+        #if os(iOS)
+        FolderPicker.present(startingAt: library.pickerStartDirectory) { folder in
+            add(folder)
+        }
+        #else
+        Platform.chooseFolder(startingAt: library.rootPath) { path in
+            Task {
+                await library.addSource(URL(fileURLWithPath: path))
+                await library.scan()
+            }
+        }
+        #endif
+    }
+
+    #if os(iOS)
+    /// A folder is only worth adding if it can produce something to play, and
+    /// "IPA" is a folder name that says nothing about where it lives. Counting
+    /// first turns a silent 0-track row into a question that carries the path.
+    private func add(_ folder: PickedFolder) {
+        PickerLog.shared.note("adding \(folder.url.path)")
+        Task {
+            let outcome = await Task.detached(priority: .userInitiated) { () -> (Int, String?) in
+                // Reading the directory first: a folder the app has no
+                // permission for is not empty, it is unreadable, and only the
+                // error says which.
+                let problem = FolderScan.read(folder.url).problem
+                return (FolderScan.count(under: folder.url), problem)
+            }.value
+            PickerLog.shared.note("found \(outcome.0) playable in it")
+            if let problem = outcome.1 {
+                PickerLog.shared.note("read failed: \(problem)")
+                readProblem = problem
+                emptyFolder = folder
+            } else if outcome.0 == 0 {
+                emptyFolder = folder
+            } else {
+                commit(folder)
+            }
+        }
+    }
+
+    private func commit(_ folder: PickedFolder) {
+        if library.addPrepared(folder) {
+            Task { await library.scan() }
+        } else {
+            PickerLog.shared.note("already in the list")
+        }
+    }
+
+    #endif
 
     private var p: M3Palette {
         palette ?? M3Palette(seed: palettes.librarySeed, isDark: scheme == .dark)
@@ -16,57 +83,121 @@ struct SettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                Text("Settings")
+                Text(L("Settings"))
                     .font(.display(40, .semibold))
                     .foregroundStyle(p.onSurface)
                     .padding(.top, 40)
 
-                section("Appearance") {
+                section(L("Language")) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Picker("", selection: $lang.language) {
+                            ForEach(AppLanguage.allCases) { language in
+                                Text(language.displayName).tag(language)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 280)
+                    }
+                }
+
+                section(L("Appearance")) {
                     VStack(alignment: .leading, spacing: 14) {
-                        row("Theme colour", "Tints the library. The player takes its colour from the artwork instead.")
+                        row(L("Theme colour"), L("Tints the library. The player takes its colour from the artwork instead."))
                         HueBar(hue: $palettes.libraryHue, palette: p)
                             .frame(height: 30)
                         swatches
                     }
                 }
 
-                section("Music folder") {
-                    VStack(alignment: .leading, spacing: 14) {
-                        Text(displayPath)
-                            .font(.body(12.5))
-                            .foregroundStyle(p.onSurface)
-                            .lineLimit(1)
-                            .truncationMode(.head)
-                            .help(library.rootPath)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                section(L("Music folders")) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(library.sources) { source in
+                            HStack(spacing: 10) {
+                                Image(systemName: "folder.fill")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(p.onSurfaceVariant)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(source.name)
+                                        .font(.body(12.5))
+                                        .foregroundStyle(p.onSurface)
+                                        .lineLimit(1)
+                                    Text(subtitle(for: source))
+                                        .font(.body(10.5))
+                                        .foregroundStyle(p.onSurfaceVariant)
+                                        .lineLimit(1)
+                                        .truncationMode(.head)
+                                }
+                                Spacer(minLength: 8)
+                                Button {
+                                    library.removeSource(id: source.id)
+                                    Task { await library.scan() }
+                                } label: {
+                                    Image(systemName: "minus.circle.fill")
+                                        .font(.system(size: 15))
+                                        .foregroundStyle(p.onSurfaceVariant)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(library.isScanning)
+                            }
                             .padding(.horizontal, 14)
                             .padding(.vertical, 11)
                             .background(Capsule().fill(p.surfaceContainerHigh))
+                        }
 
-                        if Platform.supportsFolderPicker {
-                            Button("Choose folder…") { chooseFolder() }
+                        HStack(spacing: 10) {
+                            Button(L("Add folder…")) { addFolder() }
                                 .buttonStyle(PillButtonStyle(kind: .tonal, palette: p))
                                 .disabled(library.isScanning)
-                        } else {
-                            Text("Drag FLAC files into Aria in Finder while your iPhone is connected.")
-                                .font(.body(11.5))
-                                .foregroundStyle(p.onSurfaceVariant)
-                                .fixedSize(horizontal: false, vertical: true)
+
+                            if library.isScanning {
+                                HStack(spacing: 6) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    Text(L("Scanning…"))
+                                        .font(.body(11))
+                                        .foregroundStyle(p.onSurfaceVariant)
+                                }
+                            }
                         }
+
+                        // Which build is on the phone: the file name and the
+                        // bundle version are stamped from the same number.
+                        Text(footer)
+                            .font(.body(10.5))
+                            .foregroundStyle(p.onSurfaceVariant)
                     }
                 }
 
                 #if os(iOS)
-                section("Output") {
+                section(L("Output")) {
                     VStack(alignment: .leading, spacing: 10) {
-                        row("Playing through", player.outputDescription)
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 10) {
+                                Image(systemName: "speaker.wave.2.fill")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(p.onSurfaceVariant)
+                                Slider(value: $player.volume, in: 0...1)
+                                    .tint(p.primary)
+                                Text(volumeText)
+                                    .font(.body(11))
+                                    .monospacedDigit()
+                                    .foregroundStyle(p.onSurfaceVariant)
+                                    .frame(width: 50, alignment: .trailing)
+                            }
+                            Text(L("Volume inside Aria, on top of the system volume — down to −50 dB when iOS's lowest step is still too loud."))
+                                .font(.body(11))
+                                .foregroundStyle(p.onSurfaceVariant)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        row(L("Playing through"), player.outputDescription)
                         if player.outputIsLossy {
-                            Text("Bluetooth re-encodes audio before it reaches your headphones, so lossless files stop being lossless at that point. Wired headphones or a USB-C DAC keep the full quality.")
+                            Text(L("Bluetooth re-encodes audio before it reaches your headphones, so lossless files stop being lossless at that point. Wired headphones or a USB-C DAC keep the full quality."))
                                 .font(.body(11))
                                 .foregroundStyle(p.onSurfaceVariant)
                                 .fixedSize(horizontal: false, vertical: true)
                         } else {
-                            Text("Aria asks the hardware to run at the file's own sample rate, so nothing is resampled on the way out.")
+                            Text(L("Aria asks the hardware to run at the file's own sample rate, so nothing is resampled on the way out."))
                                 .font(.body(11))
                                 .foregroundStyle(p.onSurfaceVariant)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -75,28 +206,84 @@ struct SettingsView: View {
                 }
                 #endif
 
-                section("Library") {
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack(spacing: 22) {
-                            stat(plural(library.tracks.count, "song"))
-                            stat(plural(library.albums.count, "album"))
-                            stat(formatDurationLong(library.totalDuration))
+                #if os(macOS)
+                section(L("Output")) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 10) {
+                            Text(L("Capabilities detected on each device"))
+                                .font(.body(11.5))
+                                .foregroundStyle(p.onSurfaceVariant)
+                            Spacer()
+                            Button { player.refreshOutputDevices() } label: {
+                                Label(L("Refresh"), systemImage: "arrow.clockwise")
+                            }
+                            .buttonStyle(PillButtonStyle(kind: .tonal, palette: p))
+                        }
+                        .padding(.bottom, 2)
+
+                        ForEach(player.outputDevices) { device in
+                            outputDeviceRow(device)
                         }
 
-                        row("Last scanned", lastScanText)
+                        if player.outputDevices.isEmpty {
+                            Text(L("No output devices found."))
+                                .font(.body(12))
+                                .foregroundStyle(p.onSurfaceVariant)
+                        }
+                    }
+                }
+
+                section(L("Output mode")) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(L("How sound reaches the device"))
+                            .font(.body(11.5))
+                            .foregroundStyle(p.onSurfaceVariant)
+
+                        HStack(alignment: .top, spacing: 12) {
+                            ForEach(OutputMode.allCases, id: \.self) { mode in
+                                outputModeCard(mode)
+                            }
+                        }
+
+                        Text(player.exclusiveStatus)
+                            .font(.body(11.5, .medium))
+                            .foregroundStyle(player.outputMode == .exclusive
+                                ? (player.exclusiveHogGranted
+                                   ? p.primary
+                                   : Color(red: 0.99, green: 0.68, blue: 0.29))
+                                : p.onSurfaceVariant)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Text(L("Exclusive mode changes the device's clock rate for the whole system and mutes other apps using it. Aria releases the device when you switch back to Shared or quit. If the device refuses the rate or exclusive access, playback falls back to Shared automatically."))
+                            .font(.body(11))
+                            .foregroundStyle(p.onSurfaceVariant)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                #endif
+
+                section(L("Library")) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack(spacing: 22) {
+                            stat(Lplural(library.tracks.count, "song"))
+                            stat(Lplural(library.albums.count, "album"))
+                            stat(Lduration(library.totalDuration))
+                        }
+
+                        row(L("Last scanned"), lastScanText)
 
                         HStack(spacing: 12) {
                             Button {
                                 Task { await library.scan() }
                             } label: {
-                                Label("Rescan library", systemImage: "arrow.clockwise")
+                                Label(L("Rescan library"), systemImage: "arrow.clockwise")
                             }
                             .buttonStyle(PillButtonStyle(kind: .filled, palette: p))
                             .disabled(library.isScanning)
 
                             if library.isScanning {
                                 ProgressView().controlSize(.small).scaleEffect(0.75)
-                                Text("Scanning…")
+                                Text(L("Scanning…"))
                                     .font(.body(12))
                                     .foregroundStyle(p.onSurfaceVariant)
                             }
@@ -111,9 +298,137 @@ struct SettingsView: View {
         }
         .scrollContentBackground(.hidden)
         .background(p.surface)
+        #if os(iOS)
+        .alert(readProblem == nil ? L("No music files in that folder") : L("Aria can't open that folder"),
+               isPresented: Binding(get: { emptyFolder != nil },
+                                    set: { if !$0 { emptyFolder = nil; readProblem = nil } })) {
+            Button(L("Choose another")) { emptyFolder = nil; readProblem = nil; addFolder() }
+            if readProblem == nil {
+                Button(L("Add anyway")) {
+                    if let folder = emptyFolder { commit(folder) }
+                    emptyFolder = nil
+                }
+            }
+            Button(L("Cancel"), role: .cancel) { emptyFolder = nil; readProblem = nil }
+        } message: {
+            if let problem = readProblem {
+                Text("\(emptyFolder?.path ?? "")\n\n\(problem)\n\n" + L("iOS only lets an app read a folder it was handed permission for, and a SideStore-signed build sometimes never receives that permission. Copying the music into On My iPhone → Aria from the Files app and adding that folder here works around it."))
+            } else {
+                Text("\(emptyFolder?.path ?? "")\n\n" + L("Aria reads FLAC, ALAC, MP3, AAC, WAV or AIFF, so this folder would show up with nothing in it. The path above is what was picked — if your music lives somewhere else, pick that folder instead."))
+            }
+        }
+        #endif
     }
 
     // MARK: Pieces
+
+    #if os(macOS)
+    private func outputDeviceRow(_ device: AudioOutputDevice) -> some View {
+        let inUse = player.selectedOutputUID == device.uid
+            || (player.selectedOutputUID == nil && device.isDefault)
+        return Button {
+            player.selectOutputDevice(uid: device.uid)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: inUse ? "smallcircle.filled.circle" : "circle")
+                    .font(.system(size: 15))
+                    .foregroundStyle(inUse ? p.primary : p.onSurfaceVariant)
+                    .frame(width: 18)
+
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(p.surfaceContainerHigh)
+                        .frame(width: 32, height: 32)
+                    Image(systemName: device.symbol)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(p.onSurface)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Text(device.name)
+                            .font(.body(13.5, .semibold))
+                            .foregroundStyle(p.onSurface)
+                            .lineLimit(1)
+                        if inUse {
+                            Text(L("In use"))
+                                .font(.body(10, .semibold))
+                                .foregroundStyle(p.primary)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(p.primary.opacity(0.16)))
+                        }
+                    }
+                    HStack(spacing: 6) {
+                        capabilityChip(L(device.capability), color: device.capabilityColor)
+                        capabilityChip(device.rateText, color: p.onSurfaceVariant)
+                        capabilityChip(device.bitText, color: p.onSurfaceVariant)
+                        capabilityChip(device.channelText, color: p.onSurfaceVariant)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(11)
+            .background(
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .fill(inUse ? p.primaryContainer.opacity(0.28) : p.surfaceContainerHigh)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .stroke(inUse ? p.primary.opacity(0.75) : p.outline.opacity(0.25),
+                            lineWidth: inUse ? 1.5 : 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func capabilityChip(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.body(10, .medium))
+            .foregroundStyle(color)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .overlay(Capsule().stroke(color.opacity(0.45), lineWidth: 0.8))
+    }
+
+    private func outputModeCard(_ mode: OutputMode) -> some View {
+        let selected = player.outputMode == mode
+        return Button {
+            player.setOutputMode(mode)
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text(L(mode.title))
+                        .font(.display(14.5, .semibold))
+                        .foregroundStyle(p.onSurface)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 15))
+                        .foregroundStyle(selected ? p.primary : p.onSurfaceVariant.opacity(0.6))
+                }
+                Text(L(mode.detail))
+                    .font(.body(11.5))
+                    .foregroundStyle(p.onSurfaceVariant)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(13)
+            .frame(maxWidth: .infinity, minHeight: 122, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .fill(p.surfaceContainerHigh)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .stroke(selected ? p.primary : p.outline.opacity(0.3),
+                            lineWidth: selected ? 2 : 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+    #endif
 
     private func section<Content: View>(_ title: String,
                                         @ViewBuilder content: () -> Content) -> some View {
@@ -172,29 +487,52 @@ struct SettingsView: View {
         }
     }
 
-    private var displayPath: String {
-        // homeDirectoryForCurrentUser is macOS-only; NSHomeDirectory works on
-        // both, returning the app container on iOS.
+    /// Shortens a folder path for display: the app container becomes "~", and
+    /// an iCloud Drive folder loses the long provider prefix.
+    /// Build number and library counts, so a screenshot says which build is
+    /// running without anyone having to dig through iOS Settings.
+    /// The attenuation in decibels, which is the number that answers "how much
+    /// quieter than the system's own lowest step is this".
+    private var volumeText: String {
+        guard player.volume > 0.0001 else { return L("mute") }
+        return "\(Int(AudioPlayer.decibels(for: player.volume).rounded())) dB"
+    }
+
+    private var footer: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "–"
+        let folders = library.sources.count
+        let tracks = library.tracks.count
+        return "Aria v\(version) · " + Lplural(folders, "folder") + " · " + Lplural(tracks, "track")
+    }
+
+    private func shortPath(_ path: String) -> String {
+        // NSHomeDirectory works on both platforms: the app container on iOS.
         let home = NSHomeDirectory()
-        return library.rootPath.hasPrefix(home)
-            ? "~" + library.rootPath.dropFirst(home.count)
-            : library.rootPath
+        if path.hasPrefix(home) { return "~" + path.dropFirst(home.count) }
+        if let range = path.range(of: "/Mobile Documents/com~apple~CloudDocs") {
+            return "iCloud Drive" + path[range.upperBound...]
+        }
+        return path
+    }
+
+    /// Path plus the count that proves the folder is being read. A folder that
+    /// gained access but held no playable files shows "0 tracks" instead of
+    /// nothing.
+    private func subtitle(for source: LibrarySource) -> String {
+        let count = library.trackCount(in: source)
+        let path = shortPath(source.path)
+        guard count > 0 else { return "\(path) · " + L("no music here") }
+        return "\(path) · " + Lplural(count, "track")
     }
 
     private var lastScanText: String {
-        guard let date = library.lastScan else { return "Never" }
+        guard let date = library.lastScan else { return L("Never") }
         // The relative formatter renders a fresh scan as "in 0 seconds".
-        guard Date().timeIntervalSince(date) > 10 else { return "Just now" }
+        guard Date().timeIntervalSince(date) > 10 else { return L("Just now") }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
+        formatter.locale = LanguageSettings.shared.language.locale
         return formatter.localizedString(for: date, relativeTo: Date())
-    }
-
-    private func chooseFolder() {
-        Platform.chooseFolder(startingAt: library.rootPath) { path in
-            library.rootPath = path
-            Task { await library.scan() }
-        }
     }
 }
 

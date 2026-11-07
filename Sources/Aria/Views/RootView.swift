@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Navigation
 
@@ -26,9 +27,9 @@ enum RailDestination: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .library: return "Library"
-        case .search: return "Search"
-        case .settings: return "Settings"
+        case .library: return L("Library")
+        case .search: return L("Search")
+        case .settings: return L("Settings")
         }
     }
 
@@ -46,11 +47,11 @@ enum LibraryTab: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .songs: return "Songs"
-        case .albums: return "Albums"
-        case .artists: return "Artists"
-        case .playlists: return "Playlists"
-        case .recent: return "Recent"
+        case .songs: return L("Songs")
+        case .albums: return L("Albums")
+        case .artists: return L("Artists")
+        case .playlists: return L("Playlists")
+        case .recent: return L("Recent")
         }
     }
 }
@@ -103,7 +104,7 @@ struct RootView: View {
 
             if player.current != nil {
                 MiniPlayer(palette: nowPlayingPalette) {
-                    withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
+                    withAnimation(.easeOut(duration: 0.26)) {
                         showNowPlaying = true
                     }
                 }
@@ -115,7 +116,7 @@ struct RootView: View {
 
             if showNowPlaying {
                 NowPlayingView(palette: nowPlayingPalette) {
-                    withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
+                    withAnimation(.easeOut(duration: 0.26)) {
                         showNowPlaying = false
                     }
                 }
@@ -200,7 +201,7 @@ struct RootView: View {
     private var libraryScreen: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center) {
-                Text("Library")
+                Text(L("Library"))
                     .font(.display(40, .semibold))
                     .foregroundStyle(active.onSurface)
                 Spacer()
@@ -279,7 +280,7 @@ struct EmptyLibraryView: View {
             Image(systemName: "music.note.list")
                 .font(.system(size: 46, weight: .light))
                 .foregroundStyle(palette.onSurfaceVariant)
-            Text("Nothing here yet")
+            Text(L("Nothing here yet"))
                 .font(.display(26, .semibold))
                 .foregroundStyle(palette.onSurface)
             Text(hint)
@@ -289,18 +290,13 @@ struct EmptyLibraryView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 34)
 
-            HStack(spacing: 12) {
-                // Picking a folder is macOS-only; on iOS the library is always
-                // the app's Documents folder, so the button would do nothing.
-                if Platform.supportsFolderPicker {
-                    Button("Choose folder") { chooseFolder() }
-                        .buttonStyle(PillButtonStyle(kind: .filled, palette: palette))
-                    Button("Rescan") { Task { await library.scan() } }
-                        .buttonStyle(PillButtonStyle(kind: .tonal, palette: palette))
-                } else {
-                    Button("Rescan") { Task { await library.scan() } }
-                        .buttonStyle(PillButtonStyle(kind: .filled, palette: palette))
-                }
+            VStack(spacing: 8) {
+                Button(L("Add folder")) { addFolder() }
+                    .buttonStyle(PillButtonStyle(kind: .tonal, palette: palette))
+                Button(L("Rescan")) { Task { await library.scan() } }
+                    .buttonStyle(PillButtonStyle(kind: .text, palette: palette, size: 13,
+                                                 padding: EdgeInsets(top: 4, leading: 10,
+                                                                     bottom: 4, trailing: 10)))
             }
             .padding(.top, 6)
         }
@@ -309,16 +305,28 @@ struct EmptyLibraryView: View {
 
     /// The sandbox path is UUID soup on iOS; say what to do instead.
     private var hint: String {
-        Platform.supportsFolderPicker
-            ? library.rootPath
-            : "Plug your iPhone in, then drag FLAC files into Aria under Finder \u{25B8} your iPhone \u{25B8} Files. Then tap Rescan."
+        #if os(macOS)
+        library.rootPath
+        #else
+        L("No music files in your music folders yet. Add the folder they live in — On My iPhone, iCloud Drive, or anywhere the Files app can reach. Aria reads FLAC, ALAC, MP3, AAC, WAV or AIFF.")
+        #endif
     }
 
-    private func chooseFolder() {
-        Platform.chooseFolder(startingAt: library.rootPath) { path in
-            library.rootPath = path
-            Task { await library.scan() }
+    private func addFolder() {
+        #if os(iOS)
+        FolderPicker.present(startingAt: library.pickerStartDirectory) { folder in
+            if library.addPrepared(folder) {
+                Task { await library.scan() }
+            }
         }
+        #else
+        Platform.chooseFolder(startingAt: library.rootPath) { path in
+            Task {
+                await library.addSource(URL(fileURLWithPath: path))
+                await library.scan()
+            }
+        }
+        #endif
     }
 }
 
@@ -344,7 +352,7 @@ struct SearchScreen: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Search")
+            Text(L("Search"))
                 .font(.display(40, .semibold))
                 .foregroundStyle(palette.onSurface)
                 .padding(.horizontal, 30)
@@ -357,14 +365,14 @@ struct SearchScreen: View {
 
             if query.isEmpty {
                 Spacer()
-                Text("Find something to play")
+                Text(L("Find something to play"))
                     .font(.body(14))
                     .foregroundStyle(palette.onSurfaceVariant)
                     .frame(maxWidth: .infinity)
                 Spacer()
             } else if results.isEmpty {
                 Spacer()
-                Text("No matches for “\(query)”")
+                Text(Lmatch(query))
                     .font(.body(14))
                     .foregroundStyle(palette.onSurfaceVariant)
                     .frame(maxWidth: .infinity)

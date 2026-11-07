@@ -28,13 +28,13 @@ struct SongListView: View {
                         Button {
                             player.playAll(tracks, shuffled: true)
                         } label: {
-                            Label("Shuffle", systemImage: "shuffle")
+                            Label(L("Shuffle"), systemImage: "shuffle")
                         }
                         .buttonStyle(PillButtonStyle(
                             kind: .tonal, palette: palette,
                             padding: EdgeInsets(top: 9, leading: 18, bottom: 9, trailing: 18)))
 
-                        Text(plural(tracks.count, "song"))
+                        Text(Lplural(tracks.count, "song"))
                             .font(.label(12))
                             .foregroundStyle(palette.onSurfaceVariant)
                         Spacer()
@@ -185,19 +185,19 @@ struct TrackMenu: View {
     @EnvironmentObject var library: LibraryStore
 
     var body: some View {
-        Button("Play") { player.play(track, in: context) }
-        Button("Play album") {
+        Button(L("Play")) { player.play(track, in: context) }
+        Button(L("Play album")) {
             player.play(track, in: context.filter { $0.albumKey == track.albumKey })
         }
         Divider()
         if Platform.canRevealInFileManager {
-            Button("Reveal in Finder") { Platform.reveal(track.url) }
+            Button(L("Reveal in Finder")) { Platform.reveal(track.url) }
         }
-        Button("Copy title") { Platform.copyToPasteboard(track.title) }
+        Button(L("Copy title")) { Platform.copyToPasteboard(track.title) }
 
         if !playlistStore.playlists.isEmpty {
             Divider()
-            Menu("Add to playlist") {
+            Menu(L("Add to playlist")) {
                 ForEach(playlistStore.playlists) { list in
                     Button(list.name) {
                         playlistStore.add(track, to: list, root: library.rootPath)

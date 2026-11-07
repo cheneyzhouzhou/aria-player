@@ -121,7 +121,7 @@ final class PaletteStore: ObservableObject {
     /// Cached seed for an album, kicking off extraction on the first miss.
     func seed(for key: String, artwork track: Track?) -> PaletteSeed? {
         if let hit = seeds[key] { return hit }
-        guard let track, track.artRange != nil, !pending.contains(key) else { return nil }
+        guard let track, track.hasArtwork, !pending.contains(key) else { return nil }
 
         pending.insert(key)
         ArtworkCache.shared.artwork(for: track, key: key) { [weak self] image in

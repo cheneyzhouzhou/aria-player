@@ -7,30 +7,12 @@ import Foundation
 /// loaded, so scanning a library never pulls megabytes of JPEG off disk.
 enum FLACMetadata {
 
-    struct Info {
-        var sampleRate: Int = 0
-        var channels: Int = 0
-        var bitDepth: Int = 0
-        var totalSamples: UInt64 = 0
-        /// Vorbis comments, keys upper-cased. Repeated keys are joined with ", ".
-        var tags: [String: String] = [:]
-        /// Only the first value of each repeated key. Grouping by artist needs
-        /// the lead credit, not "Lead, Feature, Feature".
-        var primaryTags: [String: String] = [:]
-        /// Byte range of the embedded picture payload within the file, if present.
-        var pictureRange: Range<UInt64>?
-
-        var duration: Double {
-            sampleRate > 0 ? Double(totalSamples) / Double(sampleRate) : 0
-        }
-    }
-
     private enum BlockType: UInt8 {
         case streamInfo = 0, vorbisComment = 4, picture = 6
     }
 
     /// Reads the metadata blocks of `url`. Returns nil if the file is not FLAC.
-    static func read(at url: URL) -> Info? {
+    static func read(at url: URL) -> AudioInfo? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
 
@@ -38,7 +20,8 @@ enum FLACMetadata {
             return nil
         }
 
-        var info = Info()
+        var info = AudioInfo()
+        info.format = .flac
         var offset: UInt64 = 4
         var isLast = false
 
@@ -66,6 +49,7 @@ enum FLACMetadata {
                     // Record where the image bytes live rather than keeping them.
                     if let local = pictureDataRange(in: body) {
                         info.pictureRange = (offset + UInt64(local.lowerBound)) ..< (offset + UInt64(local.upperBound))
+                        info.hasPicture = true
                     }
                 }
             default:
@@ -92,18 +76,22 @@ enum FLACMetadata {
 
     /// STREAMINFO packs sample rate, channels, bit depth and total samples into
     /// 64 big-endian bits starting at byte 10.
-    private static func parseStreamInfo(_ body: Data, into info: inout Info) {
+    private static func parseStreamInfo(_ body: Data, into info: inout AudioInfo) {
         let b = [UInt8](body)
         var packed: UInt64 = 0
         for i in 10..<18 { packed = packed << 8 | UInt64(b[i]) }
         info.sampleRate = Int((packed >> 44) & 0xF_FFFF)
         info.channels = Int((packed >> 41) & 0x7) + 1
         info.bitDepth = Int((packed >> 36) & 0x1F) + 1
-        info.totalSamples = packed & 0xF_FFFF_FFFF
+        let totalSamples = packed & 0xF_FFFF_FFFF
+        // STREAMINFO carries the exact length, so no decoding is needed.
+        if info.sampleRate > 0 {
+            info.duration = Double(totalSamples) / Double(info.sampleRate)
+        }
     }
 
     /// Vorbis comments are the one FLAC block that uses *little*-endian lengths.
-    private static func parseVorbisComment(_ body: Data, into info: inout Info) {
+    private static func parseVorbisComment(_ body: Data, into info: inout AudioInfo) {
         let b = [UInt8](body)
         var p = 0
 

@@ -6,7 +6,10 @@ cd "$(dirname "$0")"
 APP="build/Aria.app"
 
 echo "==> Compiling"
-swift build -c release
+# SwiftPM spawns its own sandbox; when this script is itself run inside one
+# (WorkBuddy agent shell) manifest loading fails with "sandbox_apply: Operation
+# not permitted". Disabling it is harmless for a normal terminal build.
+swift build -c release --disable-sandbox -Xswiftc -Xfrontend -Xswiftc -disable-sandbox
 
 echo "==> Assembling bundle"
 rm -rf "$APP"

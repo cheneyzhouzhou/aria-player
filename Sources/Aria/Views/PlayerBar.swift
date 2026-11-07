@@ -96,6 +96,10 @@ struct NowPlayingView: View {
     }
 
     var body: some View {
+        #if os(macOS)
+        MacPlaybackStage(palette: palette, onDismiss: onDismiss)
+            .environmentObject(player)
+        #else
         ZStack {
             palette.surface.ignoresSafeArea()
 
@@ -113,6 +117,7 @@ struct NowPlayingView: View {
                 .environmentObject(player)
                 .frame(width: 560, height: 640)
         }
+        #endif
     }
 
     private var playerColumn: some View {
@@ -164,7 +169,7 @@ struct NowPlayingView: View {
                        fill: palette.surfaceContainer, foreground: palette.onSurface,
                        action: onDismiss)
             Spacer()
-            Text("Now Playing")
+            Text(L("Now Playing"))
                 .font(.label(13, .semibold))
                 .foregroundStyle(palette.onSurfaceVariant)
             Spacer()
@@ -311,7 +316,7 @@ struct QueueList: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Text("Up next")
+                Text(L("Up next"))
                     .font(.display(19, .semibold))
                     .foregroundStyle(palette.onSurface)
                 if player.isShuffled {
@@ -330,7 +335,7 @@ struct QueueList: View {
 
             if player.upNext.isEmpty {
                 Spacer()
-                Text("Nothing queued")
+                Text(L("Nothing queued"))
                     .font(.body(13))
                     .foregroundStyle(palette.onSurfaceVariant)
                     .frame(maxWidth: .infinity)

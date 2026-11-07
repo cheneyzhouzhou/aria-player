@@ -15,6 +15,10 @@ struct PhoneRootView: View {
     @State private var tab: LibraryTab = .albums
     @State private var search = ""
     @State private var showNowPlaying = false
+    /// How far the page has been dragged sideways. It exists so the content
+    /// follows the finger: without it a swipe that ends one point short of the
+    /// threshold looks like a dead gesture.
+    @State private var swipeOffset: CGFloat = 0
 
     private var chrome: M3Palette {
         M3Palette(seed: palettes.librarySeed, isDark: scheme == .dark)
@@ -67,9 +71,7 @@ struct PhoneRootView: View {
 
     @ViewBuilder
     private var content: some View {
-        if library.tracks.isEmpty && !library.isScanning {
-            EmptyLibraryView(palette: active)
-        } else if let route = nav.route {
+        if let route = nav.route {
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
                     IconButton(system: "arrow.left", size: 40, glyph: 15,
@@ -89,30 +91,60 @@ struct PhoneRootView: View {
             }
         } else {
             switch destination {
-            case .library: libraryScreen
+            case .library:
+                // The empty state belongs to the library, not to the whole app:
+                // Settings and Search have to stay reachable with no music yet.
+                if library.tracks.isEmpty && library.isScanning {
+                    scanningScreen
+                } else if library.tracks.isEmpty {
+                    EmptyLibraryView(palette: active)
+                } else {
+                    libraryScreen
+                }
             case .search: SearchScreen(query: $search, palette: active)
             case .settings: SettingsView(palette: active)
             }
         }
     }
 
+    /// A first scan of a large folder takes a while; say so rather than
+    /// showing an empty library that looks like a failure.
+    private var scanningScreen: some View {
+        VStack(spacing: 14) {
+            ProgressView()
+                .controlSize(.large)
+            Text(L("Scanning your music folders…"))
+                .font(.body(12))
+                .foregroundStyle(active.onSurfaceVariant)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var libraryScreen: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Library")
+            Text(L("Library"))
                 .font(.display(34, .semibold))
                 .foregroundStyle(active.onSurface)
                 .padding(.horizontal, 22)
                 .padding(.bottom, 14)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 9) {
-                    ForEach(LibraryTab.allCases, id: \.self) { item in
-                        FilterChip(title: item.title, isSelected: tab == item, palette: active) {
-                            withAnimation(.snappy(duration: 0.25)) { tab = item }
+            // A swipe can land on a chip that is scrolled off the edge, so the
+            // row follows the selection rather than staying where it was.
+            ScrollViewReader { chips in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 9) {
+                        ForEach(LibraryTab.allCases, id: \.self) { item in
+                            FilterChip(title: item.title, isSelected: tab == item, palette: active) {
+                                withAnimation(.snappy(duration: 0.25)) { tab = item }
+                            }
+                            .id(item)
                         }
                     }
+                    .padding(.horizontal, 22)
                 }
-                .padding(.horizontal, 22)
+                .onChange(of: tab) { _, now in
+                    withAnimation(.snappy(duration: 0.25)) { chips.scrollTo(now, anchor: .center) }
+                }
             }
             .padding(.bottom, 12)
 
@@ -130,7 +162,50 @@ struct PhoneRootView: View {
                     SongListView(tracks: filtered(library.tracks).sorted { $0.dateAdded > $1.dateAdded })
                 }
             }
+            .offset(x: swipeOffset)
+            .simultaneousGesture(tabSwipe)
         }
+    }
+
+    // MARK: Swipe between tabs
+
+    private var tabIndex: Int {
+        LibraryTab.allCases.firstIndex(of: tab) ?? 0
+    }
+
+    /// Horizontal only: the lists underneath scroll vertically all day, and a
+    /// vertical flick that happens to drift sideways must not change the tab.
+    private var tabSwipe: some Gesture {
+        DragGesture(minimumDistance: 18)
+            .onChanged { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+                guard abs(dx) > abs(dy) * 1.4 else { return }
+                // Rubber-band at the ends, so the first and last tab still
+                // answer the finger instead of feeling broken.
+                let atStart = tabIndex == 0 && dx > 0
+                let atEnd = tabIndex == LibraryTab.allCases.count - 1 && dx < 0
+                swipeOffset = atStart || atEnd ? dx * 0.16 : dx * 0.5
+            }
+            .onEnded { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+                let flick = value.predictedEndTranslation.width
+                defer {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                        swipeOffset = 0
+                    }
+                }
+                guard abs(dx) > abs(dy) * 1.2 else { return }
+
+                let next = dx < 0 ? tabIndex + 1 : tabIndex - 1
+                let passed = abs(dx) > 56 || abs(flick) > 130
+                guard passed, LibraryTab.allCases.indices.contains(next) else { return }
+                // No animation on the switch itself: the page is already
+                // sitting where the finger left it, and the spring above
+                // carries it back into place.
+                tab = LibraryTab.allCases[next]
+            }
     }
 
     private var query: String {
@@ -269,6 +344,12 @@ struct PhoneNowPlayingView: View {
     @State private var scrubFraction: Double?
     @State private var showQueue = false
     @State private var showEQ = false
+    @State private var showAudioChain = false
+    /// Tapping the cover swaps in the lyrics; tapping again swaps back.
+    @State private var showLyrics = false
+    /// Vertical offset while the player is being pulled down to dismiss it,
+    /// so the full-screen cover behaves like the sheets it hosts.
+    @State private var dismissDrag: CGFloat = 0
 
     private var shownTime: Double {
         if let scrubFraction { return scrubFraction * player.duration }
@@ -285,13 +366,28 @@ struct PhoneNowPlayingView: View {
                 Spacer(minLength: 8)
 
                 if let track = player.current {
-                    GeometryReader { geo in
-                        CoverArt(track: track, cacheKey: track.albumKey,
-                                 radius: 30, palette: palette)
-                            .frame(width: geo.size.width, height: geo.size.width)
-                            .shadow(color: .black.opacity(0.35), radius: 26, y: 12)
+                    Group {
+                        if showLyrics {
+                            LyricsPane(track: track, currentTime: player.currentTime,
+                                       palette: palette) {
+                                withAnimation(.snappy(duration: 0.28)) { showLyrics = false }
+                            }
+                            .transition(.opacity)
+                        } else {
+                            GeometryReader { geo in
+                                CoverArt(track: track, cacheKey: track.albumKey,
+                                         radius: 30, palette: palette)
+                                    .frame(width: geo.size.width, height: geo.size.width)
+                                    .shadow(color: .black.opacity(0.35), radius: 26, y: 12)
+                            }
+                            .aspectRatio(1, contentMode: .fit)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                withAnimation(.snappy(duration: 0.28)) { showLyrics = true }
+                            }
+                            .transition(.opacity)
+                        }
                     }
-                    .aspectRatio(1, contentMode: .fit)
                     .padding(.horizontal, 34)
 
                     VStack(spacing: 5) {
@@ -317,6 +413,31 @@ struct PhoneNowPlayingView: View {
             }
             .padding(.bottom, 16)
         }
+        // A fullScreenCover has no built-in swipe-to-dismiss (unlike the
+        // sheets above). Follow the finger and close on a long pull or a
+        // quick flick; everything else springs back.
+        .offset(y: max(0, dismissDrag))
+        .gesture(
+            DragGesture(minimumDistance: 24)
+                .onChanged { value in
+                    let height = value.translation.height
+                    let width = value.translation.width
+                    guard height > 0, height > abs(width) * 1.2 else { return }
+                    dismissDrag = height
+                }
+                .onEnded { value in
+                    let height = value.translation.height
+                    let predicted = value.predictedEndTranslation.height
+                    if height > 140 || predicted > 240 {
+                        dismissDrag = 0
+                        onDismiss()
+                    } else {
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                            dismissDrag = 0
+                        }
+                    }
+                }
+        )
         .sheet(isPresented: $showQueue) {
             QueueList(palette: palette)
                 .environmentObject(player)
@@ -329,6 +450,13 @@ struct PhoneNowPlayingView: View {
                 .presentationDetents([.large])
                 .presentationBackground(palette.surface)
         }
+        .sheet(isPresented: $showAudioChain) {
+            AudioChainView(palette: palette) { showAudioChain = false }
+                .environmentObject(player)
+                .presentationDetents([.height(560), .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(palette.surface)
+        }
     }
 
     private var header: some View {
@@ -337,13 +465,14 @@ struct PhoneNowPlayingView: View {
                        fill: palette.surfaceContainer, foreground: palette.onSurface,
                        action: onDismiss)
             Spacer()
-            Text("Now Playing")
+            Text(L("Now Playing"))
                 .font(.label(12.5, .semibold))
                 .foregroundStyle(palette.onSurfaceVariant)
             Spacer()
-            IconButton(system: "list.bullet", size: 40, glyph: 15,
-                       fill: palette.surfaceContainer, foreground: palette.onSurface) {
-                showQueue = true
+            IconButton(system: "slider.vertical.3", size: 40, glyph: 15,
+                       fill: player.eqEnabled ? palette.primary : palette.surfaceContainer,
+                       foreground: player.eqEnabled ? palette.onPrimary : palette.onSurface) {
+                showEQ = true
             }
         }
         .padding(.horizontal, 18)
@@ -423,8 +552,30 @@ struct PhoneNowPlayingView: View {
                 case .one: player.repeatMode = .off
                 }
             }
-            chip(system: "slider.vertical.3", isOn: player.eqEnabled) { showEQ = true }
+            chip(system: "list.bullet", isOn: false) { showQueue = true }
+            chainChip
         }
+    }
+
+    /// Rightmost control in the bottom row. The dot reports the signal-chain
+    /// verdict without needing to open the panel.
+    private var chainChip: some View {
+        let quality = player.audioChain.quality
+        return Button { showAudioChain = true } label: {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: "waveform")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(palette.onSurfaceVariant)
+                    .frame(width: 66, height: 42)
+                    .background(Capsule().fill(palette.surfaceContainerHigh))
+                Circle()
+                    .fill(quality.color)
+                    .frame(width: 7, height: 7)
+                    .offset(x: -12, y: 7)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(L("Audio chain") + ", " + L(quality.profile))
     }
 
     private func chip(system: String, isOn: Bool, action: @escaping () -> Void) -> some View {

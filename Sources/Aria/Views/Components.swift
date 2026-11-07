@@ -155,7 +155,7 @@ struct SearchPill: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(palette.onSurfaceVariant)
 
-            TextField(prompt, text: $text)
+            TextField(L(prompt), text: $text)
                 .textFieldStyle(.plain)
                 .font(.body(13))
                 .foregroundStyle(palette.onSurface)

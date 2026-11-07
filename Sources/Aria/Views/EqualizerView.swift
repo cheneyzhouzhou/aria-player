@@ -37,10 +37,10 @@ struct EqualizerView: View {
             }
 
             VStack(alignment: .leading, spacing: 1) {
-                Text("Equalizer")
+                Text(L("Equalizer"))
                     .font(.display(22, .semibold))
                     .foregroundStyle(palette.onSurface)
-                Text(player.eqPresetName ?? "Custom")
+                Text(L(player.eqPresetName ?? "Custom"))
                     .font(.body(11.5))
                     .foregroundStyle(palette.onSurfaceVariant)
             }
@@ -60,7 +60,7 @@ struct EqualizerView: View {
 
     private var presetShelf: some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text("PRESETS")
+            Text(L("PRESETS"))
                 .font(.label(10.5, .semibold))
                 .tracking(0.9)
                 .foregroundStyle(palette.primary)
@@ -72,7 +72,7 @@ struct EqualizerView: View {
                     ForEach(0..<2, id: \.self) { row in
                         HStack(spacing: 8) {
                             ForEach(presetRow(row)) { preset in
-                                FilterChip(title: preset.name,
+                                FilterChip(title: L(preset.name),
                                            isSelected: player.eqPresetName == preset.name,
                                            palette: palette) {
                                     withAnimation(.snappy(duration: 0.25)) {
@@ -100,12 +100,12 @@ struct EqualizerView: View {
     private var faderRack: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack {
-                Text("BANDS")
+                Text(L("BANDS"))
                     .font(.label(10.5, .semibold))
                     .tracking(0.9)
                     .foregroundStyle(palette.primary)
                 Spacer()
-                Button("Reset") { withAnimation(.snappy(duration: 0.25)) { player.resetEQ() } }
+                Button(L("Reset")) { withAnimation(.snappy(duration: 0.25)) { player.resetEQ() } }
                     .buttonStyle(PillButtonStyle(
                         kind: .text, palette: palette, size: 12,
                         padding: EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8)))
@@ -135,10 +135,10 @@ struct EqualizerView: View {
     private var preampRow: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack {
-                Text("PREAMP")
-                    .font(.label(10.5, .semibold))
-                    .tracking(0.9)
-                    .foregroundStyle(palette.primary)
+            Text(L("PREAMP"))
+                .font(.label(10.5, .semibold))
+                .tracking(0.9)
+                .foregroundStyle(palette.primary)
                 Spacer()
                 Text(String(format: "%+.1f dB", player.eqPreamp))
                     .font(.ticker(11.5))
@@ -149,7 +149,7 @@ struct EqualizerView: View {
                 .tint(palette.primary)
                 .disabled(!player.eqEnabled)
 
-            Text("Heavy boosts can clip. Pull the preamp down if loud passages distort.")
+            Text(L("Heavy boosts can clip. Pull the preamp down if loud passages distort."))
                 .font(.body(11))
                 .foregroundStyle(palette.onSurfaceVariant)
                 .fixedSize(horizontal: false, vertical: true)

@@ -6,6 +6,7 @@ struct AriaApp: App {
     @StateObject private var player = AudioPlayer()
     @StateObject private var palettes = PaletteStore()
     @StateObject private var playlists = PlaylistStore()
+    @StateObject private var lang = LanguageSettings.shared
     private let nowPlaying = NowPlayingController()
 
     /// Shared setup for both platforms: wire up the system now-playing bridge,
@@ -18,6 +19,8 @@ struct AriaApp: App {
             .environmentObject(player)
             .environmentObject(palettes)
             .environmentObject(playlists)
+            .environment(\.locale, lang.language.locale)
+            .id(lang.language)
             .task {
                 nowPlaying.attach(to: player)
                 await library.scan()
@@ -28,6 +31,8 @@ struct AriaApp: App {
             .environmentObject(player)
             .environmentObject(palettes)
             .environmentObject(playlists)
+            .environment(\.locale, lang.language.locale)
+            .id(lang.language)
             .frame(minWidth: 1000, minHeight: 660)
             .task {
                 nowPlaying.attach(to: player)
@@ -47,31 +52,31 @@ struct AriaApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {}
 
-            CommandMenu("Playback") {
-                Button(player.isPlaying ? "Pause" : "Play") { player.togglePlayPause() }
+            CommandMenu(L("Playback")) {
+                Button(player.isPlaying ? L("Pause") : L("Play")) { player.togglePlayPause() }
                     .keyboardShortcut(.space, modifiers: [])
                     .disabled(player.current == nil)
-                Button("Next Track") { player.next() }
+                Button(L("Next Track")) { player.next() }
                     .keyboardShortcut(.rightArrow, modifiers: .command)
-                Button("Previous Track") { player.previous() }
+                Button(L("Previous Track")) { player.previous() }
                     .keyboardShortcut(.leftArrow, modifiers: .command)
                 Divider()
-                Button("Skip Forward 15s") { player.skip(by: 15) }
+                Button(L("Skip Forward 15s")) { player.skip(by: 15) }
                     .keyboardShortcut("]", modifiers: .command)
-                Button("Skip Back 15s") { player.skip(by: -15) }
+                Button(L("Skip Back 15s")) { player.skip(by: -15) }
                     .keyboardShortcut("[", modifiers: .command)
                 Divider()
-                Toggle("Shuffle", isOn: $player.isShuffled)
+                Toggle(L("Shuffle"), isOn: $player.isShuffled)
                     .keyboardShortcut("s", modifiers: [.command, .shift])
-                Picker("Repeat", selection: $player.repeatMode) {
-                    Text("Off").tag(RepeatMode.off)
-                    Text("All").tag(RepeatMode.all)
-                    Text("One").tag(RepeatMode.one)
+                Picker(L("Repeat"), selection: $player.repeatMode) {
+                    Text(L("Off")).tag(RepeatMode.off)
+                    Text(L("All")).tag(RepeatMode.all)
+                    Text(L("One")).tag(RepeatMode.one)
                 }
             }
 
             CommandGroup(after: .sidebar) {
-                Button("Rescan Library") {
+                Button(L("Rescan Library")) {
                     Task { await library.scan() }
                 }
                 .keyboardShortcut("r", modifiers: .command)
@@ -84,8 +89,10 @@ struct AriaApp: App {
             SettingsView()
                 .environmentObject(library)
                 .environmentObject(palettes)
-            .environmentObject(playlists)
+                .environmentObject(playlists)
                 .environmentObject(player)
+                .environment(\.locale, lang.language.locale)
+                .id(lang.language)
                 .frame(width: 560, height: 620)
         }
         #endif

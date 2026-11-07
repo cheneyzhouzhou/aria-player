@@ -12,9 +12,12 @@ TARGET="arm64-apple-ios17.0-simulator"
 echo "==> Compiling for iOS Simulator"
 rm -rf "$APP"
 mkdir -p "$APP"
+# Xcode 27's SwiftUI makes @State a macro, expanded by a helper process that
+# cannot nest inside this session's sandbox; disable its sandbox explicitly.
 xcrun --sdk iphonesimulator swiftc -O \
     -target "$TARGET" \
     -parse-as-library \
+    -Xfrontend -disable-sandbox \
     -o "$APP/Aria" \
     $(find Sources/Aria -name "*.swift")
 
