@@ -42,10 +42,27 @@ echo "==> Compiling x86_64 (Intel)"
 # shellcheck disable=SC2086
 swift build -c release --arch x86_64 --scratch-path "$X86_SCRATCH" $SWIFT_FLAGS
 
-ARM_BIN="$ARM_SCRATCH/out/Products/Release/Aria"
-X86_BIN="$X86_SCRATCH/out/Products/Release/Aria"
-[ -f "$ARM_BIN" ] || { echo "arm64 binary missing at $ARM_BIN" >&2; exit 1; }
-[ -f "$X86_BIN" ] || { echo "x86_64 binary missing at $X86_BIN" >&2; exit 1; }
+# The product path depends on the SwiftPM toolchain: newer Xcode puts it at
+# out/Products/Release/Aria, while Xcode 16's SwiftPM uses
+# <triple>/release/Aria. Resolve whichever exists instead of hard-coding one.
+locate_binary() {
+    local scratch="$1" triple="$2"
+    local candidates=(
+        "$scratch/out/Products/Release/Aria"
+        "$scratch/$triple/release/Aria"
+        "$scratch/release/Aria"
+    )
+    local p
+    for p in "${candidates[@]}"; do
+        [ -f "$p" ] && { printf '%s\n' "$p"; return 0; }
+    done
+    find "$scratch" -type f -name Aria -perm -111 2>/dev/null | head -1 || true
+}
+
+ARM_BIN="$(locate_binary "$ARM_SCRATCH" "arm64-apple-macosx")"
+X86_BIN="$(locate_binary "$X86_SCRATCH" "x86_64-apple-macosx")"
+[ -n "$ARM_BIN" ] && [ -f "$ARM_BIN" ] || { echo "arm64 binary not found under $ARM_SCRATCH" >&2; exit 1; }
+[ -n "$X86_BIN" ] && [ -f "$X86_BIN" ] || { echo "x86_64 binary not found under $X86_SCRATCH" >&2; exit 1; }
 
 echo "==> Combining into a universal binary"
 lipo -create -output "$FAT" "$ARM_BIN" "$X86_BIN"
