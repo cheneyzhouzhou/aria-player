@@ -91,10 +91,20 @@ jobs:
           UNIVERSAL_ZIP="build/Aria-v${VER}-macOS-universal.zip"
           test -f "$ARM_ZIP" || { echo "missing $ARM_ZIP" >&2; exit 1; }
           test -f "$UNIVERSAL_ZIP" || { echo "missing $UNIVERSAL_ZIP" >&2; exit 1; }
-          gh release create "$TAG" \
-            build/Aria.ipa#Aria-${TAG}.ipa \
-            "${ARM_ZIP}"#Aria-${TAG}-macOS.zip \
-            "${UNIVERSAL_ZIP}"#Aria-${TAG}-macOS-universal.zip \
-            --title "Aria ${TAG}" \
-            --generate-notes \
+          # Prefer a hand-written release note for this tag; fall back to
+          # GitHub's generated notes when there isn't one.
+          NOTES_FILE="release-notes/${TAG}.md"
+          ARGS=(
+            "$TAG"
+            "build/Aria.ipa#Aria-${TAG}.ipa"
+            "${ARM_ZIP}#Aria-${TAG}-macOS.zip"
+            "${UNIVERSAL_ZIP}#Aria-${TAG}-macOS-universal.zip"
+            --title "Aria ${TAG}"
+          )
+          if [ -f "$NOTES_FILE" ]; then
+            ARGS+=( --notes-file "$NOTES_FILE" )
+          else
+            ARGS+=( --generate-notes )
+          fi
+          gh release create "${ARGS[@]}" \
             || gh release upload "$TAG" build/Aria.ipa "$ARM_ZIP" "$UNIVERSAL_ZIP" --clobber
