@@ -23,7 +23,23 @@ struct EqualizerView: View {
             }
             .scrollContentBackground(.hidden)
         }
-        .background(palette.surface)
+        .background {
+            if AppearanceSettings.shared.usesGlass {
+                // Match the now-playing page: a dense themed frost (the same
+                // "slightly transparent" treatment as the floating player bar)
+                // rather than a flat colour that fights the artwork backdrop.
+                GlassSurface(shape: Rectangle(), tint: palette.surfaceContainer,
+                             border: palette.outline, radius: 0,
+                             showBorder: false, popup: true)
+            } else {
+                palette.surface
+            }
+        }
+        // The panel always sits on the dark playback backdrop and uses light
+        // text, so its inner glass cards must be dark too — otherwise a light
+        // system appearance paints them white under light text and the faders
+        // disappear (very noticeable over a pale cover).
+        .environment(\.colorScheme, .dark)
     }
 
     // MARK: Header
@@ -124,8 +140,11 @@ struct EqualizerView: View {
             .frame(height: 210)
             .padding(.vertical, 10)
             .padding(.horizontal, 8)
-            .background(RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .fill(palette.surfaceContainer))
+            .background {
+                SurfaceRole.panel.background(palette,
+                    shape: AnyShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous)),
+                    radius: Radius.card)
+            }
             .opacity(player.eqEnabled ? 1 : 0.45)
         }
     }
@@ -156,8 +175,11 @@ struct EqualizerView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-            .fill(palette.surfaceContainer))
+        .background {
+            SurfaceRole.panel.background(palette,
+                shape: AnyShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous)),
+                radius: Radius.card)
+        }
         .opacity(player.eqEnabled ? 1 : 0.45)
     }
 }

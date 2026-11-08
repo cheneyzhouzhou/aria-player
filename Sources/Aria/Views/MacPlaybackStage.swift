@@ -68,26 +68,43 @@ final class StageBackdrop: ObservableObject {
 
     private let cache = NSCache<NSString, PlatformImage>()
     private var task: Task<Void, Never>?
+    /// Guards against a slow decode for an earlier track landing after a
+    /// newer one when the user changes tracks quickly.
+    private var request = 0
 
     func load(for track: Track?) {
+        request += 1
+        let ticket = request
+        task?.cancel()
         guard let track else {
-            task?.cancel()
             image = nil
             return
         }
         let key = track.albumKey
+        if !track.hasArtwork {
+            // No sleeve of its own: derive the texture from the bundled default
+            // cover instead, exactly like the phone stage, so the player reads
+            // identically whether or not the track carries artwork — and the
+            // white track details keep a dark, scrimmed backdrop.
+            guard let def = DefaultCover.image, let made = makeStageBackdrop(def) else {
+                image = nil
+                return
+            }
+            image = made
+            return
+        }
         if let hit = cache.object(forKey: key as NSString) {
-            task?.cancel()
             image = hit
             return
         }
-        image = nil
-        task?.cancel()
+        // Keep the previous texture until the new one is ready: clearing it
+        // here exposes the light surface underneath for a frame, which reads
+        // as a bright flash when changing tracks.
         task = Task.detached(priority: .utility) { [weak self] in
             let art = await loadStageArtwork(for: track, key: key)
             guard let art, let made = makeStageBackdrop(art), !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
-                guard let self, !Task.isCancelled else { return }
+                guard let self, self.request == ticket else { return }
                 self.cache.setObject(made, forKey: key as NSString)
                 self.image = made
             }
@@ -106,31 +123,13 @@ private func loadStageArtwork(for track: Track, key: String) async -> PlatformIm
 }
 
 private func makeStageBackdrop(_ source: PlatformImage) -> PlatformImage? {
-    let side: CGFloat = 128
     guard let tiff = source.tiffRepresentation,
           let rep = NSBitmapImageRep(data: tiff),
-          let ci = CIImage(bitmapImageRep: rep) else { return nil }
-    let extent = ci.extent
-    let square = min(extent.width, extent.height)
-    guard square > 0 else { return nil }
-
-    let crop = CGRect(x: extent.midX - square / 2,
-                      y: extent.midY - square / 2,
-                      width: square, height: square)
-    let centred = ci.cropped(to: crop)
-        .transformed(by: CGAffineTransform(translationX: -crop.minX, y: -crop.minY))
-    let scale = side / square
-    let small = centred.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+          let input = CIImage(bitmapImageRep: rep) else { return nil }
+    let side = StageBackdropFilter.side
     let rect = CGRect(x: 0, y: 0, width: side, height: side)
-    let blurred = small
-        .clampedToExtent()
-        .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 5])
-        .applyingFilter("CIColorControls", parameters: [
-            kCIInputSaturationKey: 0.8,
-            kCIInputBrightnessKey: -0.06
-        ])
-        .cropped(to: rect)
-    guard let cg = CIContext().createCGImage(blurred, from: rect) else { return nil }
+    let texture = StageBackdropFilter.texture(from: input)
+    guard let cg = CIContext().createCGImage(texture, from: rect) else { return nil }
     return NSImage(cgImage: cg, size: NSSize(width: side, height: side))
 }
 
@@ -188,7 +187,7 @@ struct MacPlaybackStage: View {
 
             if showEQ {
                 overlayPanel(isShown: $showEQ, width: 560, height: 640) {
-                    EqualizerView(palette: palette) { showEQ = false }
+                    EqualizerView(palette: playerOverlayPalette(palette)) { showEQ = false }
                 }
             }
 
@@ -196,7 +195,7 @@ struct MacPlaybackStage: View {
                 // Tall enough that the pinned output chips don't squeeze the
                 // signal-path read-out.
                 overlayPanel(isShown: $showAudioChain, width: 500, height: 624) {
-                    AudioChainView(palette: palette) { showAudioChain = false }
+                    AudioChainView(palette: playerOverlayPalette(palette)) { showAudioChain = false }
                 }
             }
         }
@@ -226,7 +225,8 @@ struct MacPlaybackStage: View {
             content()
                 .environmentObject(player)
                 .frame(width: width, height: height)
-                .background(palette.surface)
+                // The panel content paints its own themed backdrop (glass or
+                // solid) so it matches the player; nothing is layered behind it.
                 .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
@@ -256,13 +256,15 @@ struct MacPlaybackStage: View {
     @ViewBuilder
     private var background: some View {
         ZStack {
-            palette.surface
+            // Neutral dark base so the frame before the texture arrives never
+            // shows the light surface as a bright flash.
+            ((player.current?.hasArtwork == true || DefaultCover.isAvailable)
+                ? Color(white: 0.12) : palette.surface)
             if let image = backdrop.image {
                 Image(platformImage: image)
-                    .resizable()
+                    .resizable(resizingMode: .stretch)
                     .interpolation(.high)
-                    .aspectRatio(contentMode: .fill)
-                    .overlay(Color.black.opacity(0.42))
+                    .overlay(Color.black.opacity(StageBackdropFilter.scrim))
             }
         }
         .ignoresSafeArea()
@@ -301,7 +303,7 @@ struct MacPlaybackStage: View {
         .padding(.bottom, 12)
         .overlay(alignment: .trailing) {
             if showQueue {
-                QueueList(palette: palette)
+                QueueList(palette: playerOverlayPalette(palette))
                     .frame(width: 300)
                     .frame(maxHeight: .infinity, alignment: .top)
                     .padding(.trailing, 46)
@@ -314,7 +316,12 @@ struct MacPlaybackStage: View {
     private var leftColumn: some View {
         if let track = player.current {
             VStack(alignment: .leading, spacing: 0) {
-                CoverArt(track: track, cacheKey: track.albumKey, radius: 22, palette: palette)
+                CoverArt(track: track, cacheKey: track.albumKey, radius: 22, palette: palette,
+                         // Tracks without their own sleeve fall back to the
+                         // bundled default cover, the same image the phone
+                         // uses — so the player shows the same rounded cover
+                         // on both platforms instead of a bare music-note tile.
+                         fallback: track.hasArtwork ? nil : DefaultCover.image)
                     .frame(width: 300, height: 300)
                     .shadow(color: .black.opacity(0.38), radius: 30, y: 14)
 

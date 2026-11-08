@@ -7,6 +7,7 @@ struct AriaApp: App {
     @StateObject private var palettes = PaletteStore()
     @StateObject private var playlists = PlaylistStore()
     @StateObject private var lang = LanguageSettings.shared
+    @StateObject private var appearance = AppearanceSettings.shared
     private let nowPlaying = NowPlayingController()
 
     /// Shared setup for both platforms: wire up the system now-playing bridge,
@@ -44,6 +45,9 @@ struct AriaApp: App {
     var body: some Scene {
         WindowGroup {
             root
+                // Applies the in-app Light / Dark choice to the whole window
+                // (and every palette/glass surface that reads `colorScheme`).
+                .preferredColorScheme(appearance.mode.colorScheme)
         }
         #if os(macOS)
         // The app draws its own header, so the system title bar gets out of the way.
@@ -93,6 +97,7 @@ struct AriaApp: App {
                 .environmentObject(player)
                 .environment(\.locale, lang.language.locale)
                 .id(lang.language)
+                .preferredColorScheme(appearance.mode.colorScheme)
                 .frame(width: 560, height: 620)
         }
         #endif

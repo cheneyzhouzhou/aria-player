@@ -7,11 +7,16 @@ import UIKit
 struct SettingsView: View {
     /// Supplied when hosted inside the main window; computed for the ⌘, window.
     var palette: M3Palette? = nil
+    /// When the host already paints the shared page frost behind every tab
+    /// (library, search, settings), the settings page must not paint a second
+    /// one — otherwise it would be denser than its neighbours.
+    var drawsBackdrop: Bool = true
 
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var palettes: PaletteStore
     @EnvironmentObject var player: AudioPlayer
     @StateObject private var lang = LanguageSettings.shared
+    @ObservedObject private var appearance = AppearanceSettings.shared
     @Environment(\.colorScheme) private var scheme
 
     /// A folder that was picked but holds no playable file. It is held here so the
@@ -81,7 +86,9 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        ScrollView {
+        ZStack(alignment: .topLeading) {
+            if drawsBackdrop { settingsBackdrop }
+            ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 Text(L("Settings"))
                     .font(.display(40, .semibold))
@@ -102,7 +109,15 @@ struct SettingsView: View {
                 }
 
                 section(L("Appearance")) {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text(L("Theme"))
+                            .font(.body(13.5, .medium))
+                            .foregroundStyle(p.onSurface)
+                        themePicker
+
+                        row(L("Light / dark"), L("Choose light or dark, or follow the system."))
+                        modePicker
+
                         row(L("Theme colour"), L("Tints the library. The player takes its colour from the artwork instead."))
                         HueBar(hue: $palettes.libraryHue, palette: p)
                             .frame(height: 30)
@@ -142,7 +157,10 @@ struct SettingsView: View {
                             }
                             .padding(.horizontal, 14)
                             .padding(.vertical, 11)
-                            .background(Capsule().fill(p.surfaceContainerHigh))
+                            .background {
+                                SurfaceRole.raised.background(p,
+                                    shape: AnyShape(Capsule()), radius: 999)
+                            }
                         }
 
                         HStack(spacing: 10) {
@@ -297,7 +315,7 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollContentBackground(.hidden)
-        .background(p.surface)
+        }
         #if os(iOS)
         .alert(readProblem == nil ? L("No music files in that folder") : L("Aria can't open that folder"),
                isPresented: Binding(get: { emptyFolder != nil },
@@ -320,12 +338,36 @@ struct SettingsView: View {
         #endif
     }
 
+    /// Full-bleed page backdrop. In the glass theme this is one continuous
+    /// frosted pane reaching the very top and bottom edges — so iOS no longer
+    /// shows two differently-coloured bands above and below it, and macOS no
+    /// longer leaves a coloured strip under the title bar. In the solid theme
+    /// it is the flat surface.
+    @ViewBuilder
+    private var settingsBackdrop: some View {
+        Group {
+            if AppearanceSettings.shared.usesGlass {
+                GlassSurface(shape: Rectangle(), tint: p.surfaceContainer,
+                             border: p.outline, radius: 0, showBorder: false)
+            } else {
+                p.surface
+            }
+        }
+        .ignoresSafeArea(edges: [.top, .bottom])
+    }
+
     // MARK: Pieces
 
     #if os(macOS)
     private func outputDeviceRow(_ device: AudioOutputDevice) -> some View {
-        let inUse = player.selectedOutputUID == device.uid
-            || (player.selectedOutputUID == nil && device.isDefault)
+        // Once the HAL unit has bound to a device we mirror that reality; before
+        // playback starts (no unit yet) we fall back to the user's selection so
+        // the expected device is still highlighted. Either way the highlight can
+        // never claim a device the sound isn't actually leaving through.
+        let inUse = player.actualOutputUID == device.uid
+            || (player.actualOutputUID == nil
+                && (player.selectedOutputUID == device.uid
+                    || (player.selectedOutputUID == nil && device.isDefault)))
         return Button {
             player.selectOutputDevice(uid: device.uid)
         } label: {
@@ -369,10 +411,12 @@ struct SettingsView: View {
                 Spacer(minLength: 0)
             }
             .padding(11)
-            .background(
-                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .fill(inUse ? p.primaryContainer.opacity(0.28) : p.surfaceContainerHigh)
-            )
+            .background {
+                SurfaceRole.raised.background(p,
+                    shape: AnyShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous)),
+                    radius: Radius.card,
+                    override: inUse ? p.primaryContainer.opacity(0.28) : nil)
+            }
             .overlay(
                 RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                     .stroke(inUse ? p.primary.opacity(0.75) : p.outline.opacity(0.25),
@@ -415,10 +459,11 @@ struct SettingsView: View {
             }
             .padding(13)
             .frame(maxWidth: .infinity, minHeight: 122, alignment: .topLeading)
-            .background(
-                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .fill(p.surfaceContainerHigh)
-            )
+            .background {
+                SurfaceRole.raised.background(p,
+                    shape: AnyShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous)),
+                    radius: Radius.card)
+            }
             .overlay(
                 RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                     .stroke(selected ? p.primary : p.outline.opacity(0.3),
@@ -440,8 +485,13 @@ struct SettingsView: View {
             content()
                 .padding(18)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .fill(p.surfaceContainer))
+                .background {
+                    // A floating glass card per section, sitting on the page
+                    // container — the segmented, elevated look of the reference.
+                    SurfaceRole.panel.background(p,
+                        shape: AnyShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous)),
+                        radius: Radius.card)
+                }
         }
     }
 
@@ -474,7 +524,9 @@ struct SettingsView: View {
                     withAnimation(.easeInOut(duration: 0.4)) { palettes.libraryHue = hue }
                 } label: {
                     Circle()
-                        .fill(Color(hue: hue, saturation: 0.62, brightness: 0.85))
+                        .fill(Color(hue: hue,
+                                    saturation: p.isDark ? 0.58 : 0.62,
+                                    brightness: p.isDark ? 0.55 : 0.85))
                         .frame(width: 26, height: 26)
                         .overlay {
                             Circle().strokeBorder(
@@ -486,6 +538,114 @@ struct SettingsView: View {
             }
         }
     }
+
+    /// Two tap-to-select cards — the appearance module's theme switch.
+    private var themePicker: some View {
+        HStack(spacing: 12) {
+            ForEach(AppearanceTheme.allCases) { theme in
+                ThemeOptionCard(theme: theme,
+                                isSelected: appearance.theme == theme,
+                                palette: p) {
+                    withAnimation(.easeInOut(duration: 0.3)) { appearance.set(theme) }
+                }
+            }
+        }
+    }
+
+    /// Follow-system / light / dark, as a compact segmented control.
+    private var modePicker: some View {
+        Picker("", selection: Binding(
+            get: { appearance.mode },
+            set: { appearance.setMode($0) }
+        )) {
+            ForEach(AppearanceMode.allCases) { mode in
+                Text(mode.title).tag(mode)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .frame(maxWidth: 320)
+    }
+
+    /// A selectable preview card for one appearance theme. The glass card renders a
+    /// real frosted mock so the choice is self-explanatory; the solid card shows a
+    /// flat swatch. The selected card is outlined in the accent colour.
+    private struct ThemeOptionCard: View {
+    let theme: AppearanceTheme
+    let isSelected: Bool
+    let palette: M3Palette
+    let action: () -> Void
+
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 10) {
+                ZStack {
+                    if theme.isGlass {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(gradient)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(.white.opacity(scheme == .dark ? 0.14 : 0.28))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(Color.white.opacity(0.45), lineWidth: 1)
+                            )
+                    } else {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(flat)
+                    }
+
+                    // Mock content lines so the two previews read as "a panel".
+                    VStack(alignment: .leading, spacing: 5) {
+                        Capsule().fill(Color.white.opacity(0.55))
+                            .frame(width: 56, height: 7)
+                        Capsule().fill(Color.white.opacity(0.32))
+                            .frame(width: 36, height: 7)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                }
+                .frame(height: 72)
+
+                HStack(spacing: 6) {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 14))
+                        .foregroundStyle(isSelected ? Color.accentColor : palette.onSurfaceVariant)
+                    Text(theme.title)
+                        .font(.body(13, .semibold))
+                        .foregroundStyle(palette.onSurface)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .fill(isSelected ? palette.primary.opacity(0.14) : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .stroke(isSelected ? palette.primary : palette.outline.opacity(0.3),
+                            lineWidth: isSelected ? 2 : 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var gradient: LinearGradient {
+        LinearGradient(colors: [
+            Color(hue: 0.60, saturation: 0.55, brightness: scheme == .dark ? 0.45 : 0.85),
+            Color(hue: 0.75, saturation: 0.50, brightness: scheme == .dark ? 0.30 : 0.70)
+        ], startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+
+    private var flat: Color {
+        Color(hue: 0.62, saturation: 0.22, brightness: scheme == .dark ? 0.30 : 0.95)
+    }
+}
 
     /// Shortens a folder path for display: the app container becomes "~", and
     /// an iCloud Drive folder loses the long provider prefix.
@@ -548,7 +708,9 @@ struct HueBar: View {
                 Capsule()
                     .fill(LinearGradient(
                         colors: stride(from: 0.0, through: 1.0, by: 0.05)
-                            .map { Color(hue: $0, saturation: 0.62, brightness: 0.85) },
+                            .map { Color(hue: $0,
+                                         saturation: palette.isDark ? 0.58 : 0.62,
+                                         brightness: palette.isDark ? 0.55 : 0.85) },
                         startPoint: .leading, endPoint: .trailing))
                     .frame(height: 14)
 

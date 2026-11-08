@@ -101,6 +101,11 @@ final class AudioPlayer: ObservableObject {
     @Published var outputDevices: [AudioOutputDevice] = []
     @Published var selectedOutputUID: String?
     @Published var outputMode: OutputMode = .shared
+    /// Where the HAL output unit is *actually* playing right now, read back from
+    /// the unit rather than inferred from `selectedOutputUID`. The UI mirrors
+    /// this so a routing failure or a default-device drift can never make the
+    /// device highlight lie about where the sound is going.
+    @Published private(set) var actualOutputUID: String?
     /// What the last output-mode attempt ended up as. Kept structurally rather
     /// than as a finished sentence: a stored string freezes in whatever
     /// language was active when the status was set, so switching the app
@@ -436,6 +441,7 @@ final class AudioPlayer: ObservableObject {
         } catch {
             logOutput("reconnect-start-failed \(error.localizedDescription)")
         }
+        reportRoutingFailure()
         logOutput("reconnect")
     }
     #endif
@@ -486,6 +492,7 @@ final class AudioPlayer: ObservableObject {
             pinOutputDevice()
             try? engine.start()
             pinOutputDevice()
+            reportRoutingFailure()
             #else
             try? engine.start()
             #endif
@@ -739,7 +746,7 @@ extension AudioPlayer {
         let unverified = false
         #else
         let format = engine.outputNode.outputFormat(forBus: 0)
-        let chosen = activeOutputDevice
+        let chosen = actualOutputDevice
         let fallbackName: String
         let fallbackWireless: Bool
         if chosen == nil {
@@ -879,6 +886,17 @@ extension AudioPlayer {
         return outputDevices.first { $0.isDefault }
     }
 
+    /// The device the HAL output unit is bound to right now — the ground truth
+    /// the UI and the Audio chain panel should reflect. This can differ from
+    /// `activeOutputDevice` (the user's *selection*) when macOS quietly refused
+    /// the routing and kept the system default, or when the default device
+    /// changed underneath us.
+    var actualOutputDevice: AudioOutputDevice? {
+        guard let unit = engine.outputNode.audioUnit,
+              let id = unitDevice(unit) else { return nil }
+        return outputDevices.first { $0.id == id }
+    }
+
     private func activeDeviceID() -> AudioObjectID? {
         activeOutputDevice?.id ?? AudioOutputHardware.defaultDeviceID()
     }
@@ -926,6 +944,15 @@ extension AudioPlayer {
         return id
     }
 
+    /// Records the device the output unit is bound to, so the UI can show where
+    /// sound is really going instead of where we asked it to go. Cheap enough to
+    /// call after every pin.
+    private func syncActualOutputUID() {
+        guard let unit = engine.outputNode.audioUnit,
+              let id = unitDevice(unit) else { return }
+        actualOutputUID = outputDevices.first { $0.id == id }?.uid
+    }
+
     /// Makes the HAL output unit follow the selected device and verifies it by
     /// reading the property back — a device can quietly refuse the switch.
     @discardableResult
@@ -934,6 +961,7 @@ extension AudioPlayer {
               let unit = engine.outputNode.audioUnit else { return false }
         if unitDevice(unit) == wanted {
             outputRoutingFailed = false
+            syncActualOutputUID()
             return true
         }
         var target: AudioDeviceID = wanted
@@ -947,6 +975,7 @@ extension AudioPlayer {
         if !landed {
             logOutput("pin-failed osstatus=\(status)")
         }
+        syncActualOutputUID()
         return landed
     }
 

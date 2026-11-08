@@ -15,6 +15,9 @@ struct MascotScrubber: View {
     var inactiveColor: Color
     /// Pupils and mouth — must contrast with `activeColor`.
     var inkColor: Color
+    /// Eye whites. Defaults to pure white for the mini player; the artwork
+    /// backdrop passes a softer tint so no patch of the UI glares.
+    var eyeColor: Color = .white
     var onScrub: ((Double) -> Void)?
     var onCommit: ((Double) -> Void)?
 
@@ -76,7 +79,7 @@ struct MascotScrubber: View {
             // Mascot art puts the feet on its own bottom edge, so sitting the
             // frame directly on the rail plants it.
             Mascot(phase: phase, isDancing: isAnimating, size: mascotSize,
-                   fill: activeColor, ink: inkColor)
+                   fill: activeColor, ink: inkColor, eyeColor: eyeColor)
                 .frame(width: mascotSize, height: mascotSize)
                 .offset(x: x - mascotSize / 2, y: railTop - mascotSize + 3)
         }
@@ -98,6 +101,7 @@ struct Mascot: View {
     var size: CGFloat
     var fill: Color
     var ink: Color
+    var eyeColor: Color = .white
 
     /// Roughly two bounces a second.
     private var t: Double { phase * 6.6 }
@@ -189,7 +193,7 @@ struct Mascot: View {
         } else {
             ZStack {
                 Circle()
-                    .fill(.white)
+                    .fill(eyeColor)
                     .frame(width: size * 0.16, height: size * 0.16)
                 Circle()
                     .fill(ink)

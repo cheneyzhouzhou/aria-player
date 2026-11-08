@@ -11,18 +11,32 @@ struct LyricsPane: View {
     let palette: M3Palette
     let onTap: () -> Void
 
+    /// Draw the translucent panel behind the lines. The iOS player turns this
+    /// off so the lyrics sit directly on the blurred-cover backdrop instead of
+    /// appearing as a separate solid card.
+    var showsPanel: Bool = true
+    /// Foreground overrides for a dark, artwork-derived background.
+    var primaryColor: Color? = nil
+    var secondaryColor: Color? = nil
+    var accentColor: Color? = nil
+
     @State private var lyrics: Lyrics?
     @State private var loaded = false
 
+    private var primary: Color { primaryColor ?? palette.onSurface }
+    private var secondary: Color { secondaryColor ?? palette.onSurfaceVariant }
+
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 30, style: .continuous)
-                .fill(palette.surfaceContainerHigh.opacity(0.55))
+            if showsPanel {
+                RoundedRectangle(cornerRadius: 30, style: .continuous)
+                    .fill(palette.surfaceContainerHigh.opacity(0.55))
+            }
 
             content
         }
         .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .contentShape(Rectangle())
         .onTapGesture { onTap() }
         .task(id: track.id) { await load() }
     }
@@ -39,8 +53,8 @@ struct LyricsPane: View {
                                 .font(.body(index == active ? 18 : 15,
                                             index == active ? .semibold : .regular))
                                 .foregroundStyle(index == active
-                                                 ? palette.onSurface
-                                                 : palette.onSurfaceVariant.opacity(0.7))
+                                                 ? primary
+                                                 : secondary.opacity(0.7))
                                 .multilineTextAlignment(.leading)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .animation(.easeOut(duration: 0.2), value: active)
@@ -59,19 +73,19 @@ struct LyricsPane: View {
             VStack(spacing: 10) {
                 Image(systemName: "text.quote")
                     .font(.system(size: 30, weight: .light))
-                    .foregroundStyle(palette.onSurfaceVariant)
+                    .foregroundStyle(secondary)
                 Text(L("No lyrics"))
                     .font(.display(18, .semibold))
-                    .foregroundStyle(palette.onSurface)
+                    .foregroundStyle(primary)
                 Text(L("Add a .lrc file with the same name beside the audio file, or embed lyrics in the file's tags."))
                     .font(.body(11.5))
-                    .foregroundStyle(palette.onSurfaceVariant)
+                    .foregroundStyle(secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 26)
             }
         } else {
-            ProgressView().tint(palette.primary)
+            ProgressView().tint(accentColor ?? palette.primary)
         }
     }
 

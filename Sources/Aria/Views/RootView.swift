@@ -95,12 +95,18 @@ struct RootView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            active.surface.ignoresSafeArea()
+            AppBackground(active).ignoresSafeArea()
 
-            HStack(spacing: 0) {
+            HStack(spacing: AppearanceSettings.shared.usesGlass ? 16 : 0) {
                 rail
                 mainColumn
             }
+            // Glass theme: the rail and the content column become two separate
+            // glass panels floating inside a padded window over the aurora —
+            // the segmented, elevated look of the reference. The solid theme
+            // keeps its flush, single-column layout.
+            .padding(AppearanceSettings.shared.usesGlass ? 16 : 0)
+            .ignoresSafeArea(edges: .top)
 
             if player.current != nil {
                 MiniPlayer(palette: nowPlayingPalette) {
@@ -108,9 +114,9 @@ struct RootView: View {
                         showNowPlaying = true
                     }
                 }
-                .padding(.horizontal, 22)
-                .padding(.bottom, 18)
-                .padding(.leading, 92)
+                .padding(.horizontal, AppearanceSettings.shared.usesGlass ? 16 : 22)
+                .padding(.bottom, AppearanceSettings.shared.usesGlass ? 16 : 18)
+                .padding(.leading, AppearanceSettings.shared.usesGlass ? 124 : 92)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
@@ -136,8 +142,10 @@ struct RootView: View {
 
     private var rail: some View {
         VStack(spacing: 14) {
-            // Clears the hidden title bar's traffic lights.
-            Spacer().frame(height: 40)
+            // Clears the hidden title bar's traffic lights when the rail runs
+            // flush to the window top; the floating glass panel is inset, so it
+            // needs less headroom.
+            Spacer().frame(height: AppearanceSettings.shared.usesGlass ? 14 : 40)
 
             ForEach(RailDestination.allCases, id: \.self) { item in
                 RailItem(system: item.icon, title: item.title,
@@ -154,7 +162,19 @@ struct RootView: View {
             }
         }
         .frame(width: 92)
-        .background(active.surface)
+        .background {
+            if AppearanceSettings.shared.usesGlass {
+                GlassSurface(shape: RoundedRectangle(cornerRadius: 22, style: .continuous),
+                             tint: active.surfaceContainer, border: active.outline,
+                             radius: 22, strong: true)
+            } else {
+                active.surface
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: AppearanceSettings.shared.usesGlass ? 22 : 0,
+                                    style: .continuous))
+        .shadow(color: AppearanceSettings.shared.usesGlass ? .black.opacity(0.18) : .clear,
+                radius: 22, y: 10)
     }
 
     // MARK: Main column
@@ -169,11 +189,24 @@ struct RootView: View {
                 switch destination {
                 case .library: libraryScreen
                 case .search: SearchScreen(query: $search, palette: active)
-                case .settings: SettingsView(palette: active)
+                case .settings: SettingsView(palette: active, drawsBackdrop: false)
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // A single rounded glass container behind every tab (library, search,
+        // settings); its sections are separate glass cards on top.
+        .background {
+            if AppearanceSettings.shared.usesGlass {
+                GlassSurface(shape: RoundedRectangle(cornerRadius: 22, style: .continuous),
+                             tint: active.surfaceContainer, border: active.outline,
+                             radius: 22, strong: true)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: AppearanceSettings.shared.usesGlass ? 22 : 0,
+                                    style: .continuous))
+        .shadow(color: AppearanceSettings.shared.usesGlass ? .black.opacity(0.18) : .clear,
+                radius: 24, y: 12)
     }
 
     @ViewBuilder

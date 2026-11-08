@@ -196,6 +196,10 @@ struct CoverArt: View {
     let cacheKey: String
     var radius: CGFloat = Radius.art
     var palette: M3Palette
+    /// Shown in place of the empty-state music note when a track has no
+    /// artwork of its own (e.g. a bundled default sleeve). Keeps the player
+    /// from branching on "no artwork" — the cover is always a cover.
+    var fallback: PlatformImage? = nil
 
     @State private var image: PlatformImage?
 
@@ -203,6 +207,11 @@ struct CoverArt: View {
         ZStack {
             if let image {
                 Image(platformImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fill)
+            } else if let fallback {
+                Image(platformImage: fallback)
                     .resizable()
                     .interpolation(.high)
                     .aspectRatio(contentMode: .fill)

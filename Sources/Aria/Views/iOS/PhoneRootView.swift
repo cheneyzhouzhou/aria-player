@@ -19,6 +19,8 @@ struct PhoneRootView: View {
     /// follows the finger: without it a swipe that ends one point short of the
     /// threshold looks like a dead gesture.
     @State private var swipeOffset: CGFloat = 0
+    /// How far the detail page has been pulled to the right by an edge swipe.
+    @State private var backSwipeOffset: CGFloat = 0
 
     private var chrome: M3Palette {
         M3Palette(seed: palettes.librarySeed, isDark: scheme == .dark)
@@ -42,9 +44,35 @@ struct PhoneRootView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            active.surface.ignoresSafeArea()
+            AppBackground(active).ignoresSafeArea()
 
+            // One rounded glass container behind every tab, floating over the
+            // aurora inside a small inset — the reference's segmented layout.
             content
+                .background {
+                    if AppearanceSettings.shared.usesGlass {
+                        GlassSurface(shape: RoundedRectangle(cornerRadius: 26, style: .continuous),
+                                     tint: active.surfaceContainer, border: active.outline,
+                                     radius: 26, strong: true)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: AppearanceSettings.shared.usesGlass ? 26 : 0,
+                                            style: .continuous))
+                .padding(.horizontal, AppearanceSettings.shared.usesGlass ? 10 : 0)
+                .padding(.top, AppearanceSettings.shared.usesGlass ? 6 : 0)
+                // Native-style edge swipe back: a thin strip along the left
+                // edge owns the gesture (a plain gesture on the page would be
+                // swallowed by the list's ScrollView). The whole page follows
+                // the finger; album, artist and playlist detail all use it.
+                .overlay(alignment: .leading) {
+                    if nav.route != nil {
+                        Color.clear
+                            .frame(width: 18)
+                            .contentShape(Rectangle())
+                            .highPriorityGesture(backSwipe)
+                    }
+                }
+                .offset(x: nav.route != nil ? backSwipeOffset : 0)
 
             VStack(spacing: 10) {
                 if player.current != nil {
@@ -102,7 +130,7 @@ struct PhoneRootView: View {
                     libraryScreen
                 }
             case .search: SearchScreen(query: $search, palette: active)
-            case .settings: SettingsView(palette: active)
+            case .settings: SettingsView(palette: active, drawsBackdrop: false)
             }
         }
     }
@@ -208,6 +236,42 @@ struct PhoneRootView: View {
             }
     }
 
+    // MARK: Swipe back from the left edge
+
+    /// Native-style back gesture for the detail pages (album / artist /
+    /// playlist). It only engages when the drag starts within the left edge and
+    /// is mostly horizontal, so the vertical lists and any horizontal content
+    /// underneath keep working. The page follows the finger and pops when the
+    /// travel (or flick) passes the threshold, otherwise springs back.
+    private var backSwipe: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { value in
+                guard nav.route != nil, value.startLocation.x < 28 else { return }
+                let dx = value.translation.width
+                let dy = value.translation.height
+                guard dx > 0, abs(dx) > abs(dy) * 1.2 else { return }
+                backSwipeOffset = dx
+            }
+            .onEnded { value in
+                guard nav.route != nil, value.startLocation.x < 28 else { return }
+                let dx = value.translation.width
+                let dy = value.translation.height
+                let flick = value.predictedEndTranslation.width
+                let passed = abs(dx) > abs(dy) * 1.2
+                    && (dx > 90 || (dx > 30 && flick > 160))
+                if passed {
+                    // Popping swaps the content out; zero the offset first so the
+                    // library never inherits a shifted page.
+                    backSwipeOffset = 0
+                    nav.back()
+                } else {
+                    withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+                        backSwipeOffset = 0
+                    }
+                }
+            }
+    }
+
     private var query: String {
         search.trimmingCharacters(in: .whitespaces).lowercased()
     }
@@ -269,8 +333,9 @@ struct PhoneNavBar: View {
         }
         .padding(.vertical, 10)
         .background {
-            RoundedRectangle(cornerRadius: 30, style: .continuous)
-                .fill(palette.surfaceContainer)
+            SurfaceRole.panel.background(palette,
+                shape: AnyShape(RoundedRectangle(cornerRadius: 30, style: .continuous)),
+                radius: 30, strong: true)
         }
     }
 }
@@ -325,10 +390,11 @@ struct PhoneMiniPlayer: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
         .background {
-            Capsule().fill(palette.surfaceContainer)
-                .shadow(color: .black.opacity(0.25), radius: 14, y: 5)
+            SurfaceRole.panel.background(palette,
+                shape: AnyShape(Capsule()), radius: 999, strong: true)
         }
         .contentShape(Capsule())
+        .shadow(color: .black.opacity(0.25), radius: 14, y: 5)
         .onTapGesture(perform: onExpand)
     }
 }
@@ -341,6 +407,7 @@ struct PhoneNowPlayingView: View {
     let onDismiss: () -> Void
 
     @EnvironmentObject var player: AudioPlayer
+    @StateObject private var backdrop = PhoneStageBackdrop()
     @State private var scrubFraction: Double?
     @State private var showQueue = false
     @State private var showEQ = false
@@ -351,6 +418,66 @@ struct PhoneNowPlayingView: View {
     /// so the full-screen cover behaves like the sheets it hosts.
     @State private var dismissDrag: CGFloat = 0
 
+    /// Trial: when the processed cover fills the page, the foreground switches
+    /// to white — the same treatment the macOS stage uses. Before the bitmap is
+    /// ready (or when a track has no artwork) the original palette colours stay.
+    private var onStage: Bool { backdrop.image != nil }
+    /// A stage texture is now always available: real artwork when the track
+    /// has it, the bundled default cover otherwise. Keeping this true for every
+    /// track holds the neutral dark base in place until the texture arrives, so
+    /// neither opening the player nor changing tracks flashes the light
+    /// surface.
+    private var expectsBackdrop: Bool { player.current?.hasArtwork == true || DefaultCover.isAvailable }
+    private var titleColor: Color {
+        onStage ? Color(red: 0.95, green: 0.92, blue: 0.88) : palette.onSurface
+    }
+    private var secondaryColor: Color {
+        onStage ? Color.white.opacity(0.72) : palette.onSurfaceVariant
+    }
+    private var buttonFill: Color {
+        onStage ? Color.white.opacity(0.24) : palette.surfaceContainer
+    }
+    private var chipFill: Color {
+        onStage ? Color.white.opacity(0.22) : palette.surfaceContainerHigh
+    }
+
+    /// Both player states use muted controls. On the artwork backdrop the
+    /// `vivid: true` accent and pure-white glyphs read as loud patches, so they
+    /// become a warm, low-saturation tint. With no artwork the page is a plain
+    /// light/dark surface, and that same vivid accent would be a heavy dark
+    /// blue blob — so it is diluted with opacity instead. Opacity keeps the
+    /// colours tied to the active theme and works in both appearance modes.
+    /// Neutral control fill used by the transport's previous and next buttons.
+    /// The play button instead uses the cover-hued `coverAccent`, so it reads as
+    /// the hero control while the skips stay quiet.
+    private var stageAccentSoft: Color {
+        onStage ? Color.white.opacity(0.14)
+                : palette.primary.opacity(0.12)
+    }
+    private var stageOnAccentSoft: Color {
+        onStage ? Color.white.opacity(0.82)
+                : palette.onSurface.opacity(0.58)
+    }
+
+    /// Accent pulled from the *cover* and muted: low saturation, mid brightness.
+    /// The played progress bar, the mascot and the "on" highlights (EQ, shuffle,
+    /// repeat) tint with whatever sleeve is playing instead of a fixed warm
+    /// beige, so they harmonise with the blurred artwork behind them. Held back
+    /// from full brightness so it reads as a calm wash over the dark, scrimmed
+    /// backdrop rather than a glowing bar.
+    private var coverAccent: Color {
+        Color(hue: palette.seed.hue, saturation: 0.20, brightness: 0.78)
+    }
+    /// Dark companion of the same hue for the mascot's pupils/mouth and the
+    /// glyphs sitting on a `coverAccent` fill — keeps contrast inside the
+    /// cover's colour family rather than snapping to brown.
+    private var coverAccentOn: Color {
+        Color(hue: palette.seed.hue, saturation: 0.32, brightness: 0.20)
+    }
+    /// Eye whites for the mascot: pure-ish white reads cleanly against the
+    /// light pastel head.
+    private var mascotEye: Color { Color.white.opacity(0.9) }
+
     private var shownTime: Double {
         if let scrubFraction { return scrubFraction * player.duration }
         return player.currentTime
@@ -358,7 +485,29 @@ struct PhoneNowPlayingView: View {
 
     var body: some View {
         ZStack {
-            palette.surface.ignoresSafeArea()
+            // A neutral dark base for tracks with artwork: the texture covers
+            // it completely once ready, but this keeps the frame before it
+            // arrives (opening the player, or replacing it on a track change)
+            // from showing the light surface as a bright flash.
+            Group {
+                if expectsBackdrop {
+                    Color(white: 0.12)
+                } else {
+                    AppBackground(palette)
+                }
+            }
+            .ignoresSafeArea()
+
+            // The processed cover sits under everything and is dimmed so the
+            // white foreground stays legible, exactly like the desktop stage.
+            if let image = backdrop.image {
+                Image(platformImage: image)
+                    .resizable(resizingMode: .stretch)
+                    .interpolation(.high)
+                    .overlay(Color.black.opacity(StageBackdropFilter.scrim))
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+            }
 
             VStack(spacing: 0) {
                 header
@@ -369,36 +518,58 @@ struct PhoneNowPlayingView: View {
                     Group {
                         if showLyrics {
                             LyricsPane(track: track, currentTime: player.currentTime,
-                                       palette: palette) {
-                                withAnimation(.snappy(duration: 0.28)) { showLyrics = false }
-                            }
-                            .transition(.opacity)
+                                       palette: palette,
+                                       onTap: {
+                                           withAnimation(.snappy(duration: 0.28)) { showLyrics = false }
+                                       },
+                                       // Never draw a standalone card: lyrics
+                                       // sit on the player background whether
+                                       // the track has artwork or not.
+                                       showsPanel: false,
+                                       primaryColor: titleColor,
+                                       secondaryColor: secondaryColor,
+                                       accentColor: coverAccent)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .transition(.opacity)
                         } else {
-                            GeometryReader { geo in
-                                CoverArt(track: track, cacheKey: track.albumKey,
-                                         radius: 30, palette: palette)
-                                    .frame(width: geo.size.width, height: geo.size.width)
-                                    .shadow(color: .black.opacity(0.35), radius: 26, y: 12)
-                            }
-                            .aspectRatio(1, contentMode: .fit)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                withAnimation(.snappy(duration: 0.28)) { showLyrics = true }
-                            }
-                            .transition(.opacity)
+                            CoverArt(track: track, cacheKey: track.albumKey,
+                                     radius: 30, palette: palette,
+                                     // Tracks without their own sleeve fall
+                                     // back to the bundled default cover, so the
+                                     // player shows the same rounded rectangle
+                                     // either way — no second display path.
+                                     fallback: track.hasArtwork ? nil : DefaultCover.image)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .shadow(color: .black.opacity(0.35), radius: 26, y: 12)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    withAnimation(.snappy(duration: 0.28)) { showLyrics = true }
+                                }
+                                .transition(.opacity)
                         }
                     }
+                    // Both states live in one square whose side is derived from
+                    // the *width* (minus the horizontal inset), never from the
+                    // content. Insetting on the *outside* of the aspect-ratio
+                    // is what keeps the square — and therefore the scrubber,
+                    // title and transport below it — identical whether the
+                    // middle shows the cover or the lyrics. The earlier order
+                    // (inset *inside* the aspect-ratio) let the cover's own
+                    // size pull the square wider, dragging the progress bar and
+                    // the top buttons toward the screen edges.
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(1, contentMode: .fit)
                     .padding(.horizontal, 34)
 
                     VStack(spacing: 5) {
                         Text(track.title)
                             .font(.display(23, .semibold))
-                            .foregroundStyle(palette.onSurface)
+                            .foregroundStyle(titleColor)
                             .multilineTextAlignment(.center)
                             .lineLimit(2)
                         Text(track.artist)
                             .font(.body(14, .medium))
-                            .foregroundStyle(palette.onSurfaceVariant)
+                            .foregroundStyle(secondaryColor)
                             .lineLimit(1)
                     }
                     .padding(.top, 24)
@@ -412,6 +583,26 @@ struct PhoneNowPlayingView: View {
                 Spacer(minLength: 10)
             }
             .padding(.bottom, 16)
+
+            // Dim the player while a popup is open. The popups offer both a
+            // half-height and a full-height detent; without this, the gap under
+            // a half-height card would show a bright band of the cover.
+            if showQueue || showEQ || showAudioChain {
+                Color.black.opacity(0.38)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
+        .onAppear { backdrop.load(for: player.current) }
+        .animation(.easeInOut(duration: 0.22), value: showQueue)
+        .animation(.easeInOut(duration: 0.22), value: showEQ)
+        .animation(.easeInOut(duration: 0.22), value: showAudioChain)
+        .onChange(of: player.current?.albumKey) { _, _ in
+            // No withAnimation here: the backdrop swaps in one atomic update
+            // once the new texture is ready, and an animated empty state would
+            // show the light surface underneath as a bright flash.
+            backdrop.load(for: player.current)
         }
         // A fullScreenCover has no built-in swipe-to-dismiss (unlike the
         // sheets above). Follow the finger and close on a long pull or a
@@ -439,39 +630,53 @@ struct PhoneNowPlayingView: View {
                 }
         )
         .sheet(isPresented: $showQueue) {
-            QueueList(palette: palette)
+            // The queue draws its own full-bleed frost inside the sheet: it
+            // fills the sheet (no rows spilling below a shorter panel) and keeps
+            // the same frosted glass as the other player popups.
+            QueueList(palette: playerOverlayPalette(palette), background: .fullBleedGlass)
                 .environmentObject(player)
+                .environment(\.colorScheme, .dark)
+                // Reach under the home indicator so the glass fills the whole
+                // sheet; otherwise a bare light strip shows at the bottom.
+                .ignoresSafeArea(edges: .bottom)
+                // Half or full height. The player is dimmed underneath, so the
+                // half-height card doesn't sit over a bright band.
                 .presentationDetents([.medium, .large])
-                .presentationBackground(palette.surfaceContainer)
+                .presentationBackground(.clear)
         }
         .sheet(isPresented: $showEQ) {
-            EqualizerView(palette: palette) { showEQ = false }
+            EqualizerView(palette: playerOverlayPalette(palette)) { showEQ = false }
                 .environmentObject(player)
-                .presentationDetents([.large])
-                .presentationBackground(palette.surface)
+                .ignoresSafeArea(edges: .bottom)
+                .presentationDetents([.medium, .large])
+                .presentationBackground(.clear)
         }
         .sheet(isPresented: $showAudioChain) {
-            AudioChainView(palette: palette) { showAudioChain = false }
+            AudioChainView(palette: playerOverlayPalette(palette)) { showAudioChain = false }
                 .environmentObject(player)
-                .presentationDetents([.height(560), .large])
+                .ignoresSafeArea(edges: .bottom)
+                .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
-                .presentationBackground(palette.surface)
+                .presentationBackground(.clear)
         }
     }
 
     private var header: some View {
         HStack {
             IconButton(system: "chevron.down", size: 40, glyph: 15,
-                       fill: palette.surfaceContainer, foreground: palette.onSurface,
+                       fill: buttonFill,
+                       foreground: onStage ? Color.white.opacity(0.9) : palette.onSurface,
                        action: onDismiss)
             Spacer()
             Text(L("Now Playing"))
                 .font(.label(12.5, .semibold))
-                .foregroundStyle(palette.onSurfaceVariant)
+                .foregroundStyle(secondaryColor)
             Spacer()
             IconButton(system: "slider.vertical.3", size: 40, glyph: 15,
-                       fill: player.eqEnabled ? palette.primary : palette.surfaceContainer,
-                       foreground: player.eqEnabled ? palette.onPrimary : palette.onSurface) {
+                       fill: player.eqEnabled ? coverAccent : buttonFill,
+                       foreground: player.eqEnabled
+                           ? coverAccentOn
+                           : (onStage ? Color.white.opacity(0.9) : palette.onSurface)) {
                 showEQ = true
             }
         }
@@ -485,9 +690,12 @@ struct PhoneNowPlayingView: View {
                 progress: player.duration > 0 ? shownTime / player.duration : 0,
                 isAnimating: player.isPlaying,
                 height: 54, mascotSize: 38, trackWidth: 5,
-                activeColor: palette.primary,
-                inactiveColor: palette.onSurfaceVariant.opacity(0.3),
-                inkColor: palette.onPrimary,
+                activeColor: coverAccent,
+                inactiveColor: onStage
+                    ? Color.white.opacity(0.24)
+                    : palette.onSurfaceVariant.opacity(0.3),
+                inkColor: coverAccentOn,
+                eyeColor: mascotEye,
                 onScrub: { scrubFraction = $0 },
                 onCommit: {
                     player.seek(to: $0 * player.duration)
@@ -501,7 +709,7 @@ struct PhoneNowPlayingView: View {
                 Text(formatTime(player.duration))
             }
             .font(.ticker(11.5))
-            .foregroundStyle(palette.onSurfaceVariant)
+            .foregroundStyle(secondaryColor)
         }
         .padding(.horizontal, 34)
     }
@@ -511,21 +719,21 @@ struct PhoneNowPlayingView: View {
             Button { player.previous() } label: {
                 Image(systemName: "backward.fill")
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(palette.onPrimaryContainer)
+                    .foregroundStyle(stageOnAccentSoft)
                     .frame(width: 84, height: 60)
                     .background(RoundedRectangle(cornerRadius: 30, style: .continuous)
-                        .fill(palette.primaryContainer.opacity(0.6)))
+                        .fill(stageAccentSoft))
             }
             .buttonStyle(.plain)
 
             Button { player.togglePlayPause() } label: {
                 Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 24, weight: .bold))
-                    .foregroundStyle(palette.onPrimary)
+                    .foregroundStyle(coverAccentOn)
                     .frame(width: 96, height: 70)
                     .background(RoundedRectangle(cornerRadius: player.isPlaying ? 24 : 35,
                                                  style: .continuous)
-                        .fill(palette.primary))
+                        .fill(coverAccent))
             }
             .buttonStyle(.plain)
             .animation(.spring(response: 0.32, dampingFraction: 0.7), value: player.isPlaying)
@@ -533,10 +741,10 @@ struct PhoneNowPlayingView: View {
             Button { player.next() } label: {
                 Image(systemName: "forward.fill")
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(palette.onPrimaryContainer)
+                    .foregroundStyle(stageOnAccentSoft)
                     .frame(width: 84, height: 60)
                     .background(RoundedRectangle(cornerRadius: 30, style: .continuous)
-                        .fill(palette.primaryContainer.opacity(0.6)))
+                        .fill(stageAccentSoft))
             }
             .buttonStyle(.plain)
         }
@@ -565,9 +773,9 @@ struct PhoneNowPlayingView: View {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: "waveform")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(palette.onSurfaceVariant)
+                    .foregroundStyle(secondaryColor)
                     .frame(width: 66, height: 42)
-                    .background(Capsule().fill(palette.surfaceContainerHigh))
+                    .background(Capsule().fill(chipFill))
                 Circle()
                     .fill(quality.color)
                     .frame(width: 7, height: 7)
@@ -582,9 +790,11 @@ struct PhoneNowPlayingView: View {
         Button(action: action) {
             Image(systemName: system)
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(isOn ? palette.onPrimary : palette.onSurfaceVariant)
-                .frame(width: 66, height: 42)
-                .background(Capsule().fill(isOn ? palette.primary : palette.surfaceContainerHigh))
+            .foregroundStyle(isOn
+                ? coverAccentOn
+                : (onStage ? Color.white.opacity(0.82) : palette.onSurfaceVariant))
+            .frame(width: 66, height: 42)
+            .background(Capsule().fill(isOn ? coverAccent : chipFill))
         }
         .buttonStyle(.plain)
         .animation(.snappy(duration: 0.2), value: isOn)

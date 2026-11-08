@@ -62,9 +62,10 @@ struct MiniPlayer: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background {
-            Capsule().fill(palette.surfaceContainer)
-                .shadow(color: .black.opacity(0.28), radius: 18, y: 6)
+            SurfaceRole.panel.background(palette,
+                shape: AnyShape(Capsule()), radius: 999, strong: true)
         }
+        .shadow(color: .black.opacity(0.28), radius: 18, y: 6)
         .overlay {
             Capsule().strokeBorder(palette.outline.opacity(0.25), lineWidth: 1)
         }
@@ -106,14 +107,14 @@ struct NowPlayingView: View {
             HStack(spacing: 0) {
                 playerColumn
                 if showQueue {
-                    QueueList(palette: palette)
+                    QueueList(palette: playerOverlayPalette(palette))
                         .frame(width: 330)
                         .transition(.move(edge: .trailing))
                 }
             }
         }
         .sheet(isPresented: $showEQ) {
-            EqualizerView(palette: palette) { showEQ = false }
+            EqualizerView(palette: playerOverlayPalette(palette)) { showEQ = false }
                 .environmentObject(player)
                 .frame(width: 560, height: 640)
         }
@@ -308,8 +309,21 @@ struct NowPlayingView: View {
 // MARK: - Queue
 
 /// Up-next list, shown beside the player.
+/// How the queue paints its own backing.
+enum QueueBackground {
+    /// No backing (host supplies one).
+    case none
+    /// Rounded card, used when the queue floats over the macOS stage.
+    case panel
+    /// Full-bleed frosted glass for the iOS sheet: it fills the whole sheet so
+    /// rows can't spill below a shorter rounded panel, while keeping the
+    /// frosted look of the other player popups.
+    case fullBleedGlass
+}
+
 struct QueueList: View {
     let palette: M3Palette
+    var background: QueueBackground = .panel
 
     @EnvironmentObject var player: AudioPlayer
 
@@ -353,7 +367,23 @@ struct QueueList: View {
                 .scrollContentBackground(.hidden)
             }
         }
-        .background(palette.surfaceContainer)
+        .background {
+            switch background {
+            case .none:
+                EmptyView()
+            case .panel:
+                SurfaceRole.panel.background(palette,
+                    shape: AnyShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous)),
+                    radius: Radius.card, popup: true)
+            case .fullBleedGlass:
+                GlassSurface(shape: Rectangle(), tint: palette.surfaceContainer,
+                             border: palette.outline, radius: 0,
+                             showBorder: false, popup: true)
+                    // Reach under the home indicator so no bare strip shows
+                    // below the glass (and therefore no rows spill into it).
+                    .ignoresSafeArea(edges: .bottom)
+            }
+        }
     }
 }
 

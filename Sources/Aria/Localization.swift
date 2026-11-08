@@ -85,6 +85,17 @@ enum L10n {
         "Theme colour": "主题颜色",
         "Tints the library. The player takes its colour from the artwork instead.": "为音乐库着色。播放器则会从封面中提取颜色。",
 
+        // Settings — appearance / theme
+        "Theme": "主题",
+        "Solid": "纯色",
+        "Frosted glass": "毛玻璃",
+        "Light / dark": "深浅模式",
+        "System": "跟随系统",
+        "Light": "浅色",
+        "Dark": "深色",
+        "Choose light or dark, or follow the system.": "选择浅色或深色，或跟随系统。",
+        "Solid keeps Aria's current colour and surfaces. Frosted glass blurs the view behind each panel for a softer, layered look.": "“纯色”沿用 Aria 当前的配色与表面；“毛玻璃”会令每个面板背后的内容产生模糊，呈现更柔和、更具层次感的效果。",
+
         // Settings — music folders
         "Music folders": "音乐文件夹",
         "Add folder…": "添加文件夹…",

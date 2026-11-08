@@ -335,7 +335,20 @@ struct AudioChainView: View {
                 .layoutPriority(1)
             #endif
         }
-        .background(palette.surface)
+        .background {
+            if AppearanceSettings.shared.usesGlass {
+                // Same dense themed frost as the floating player bar, so the
+                // sheet sits on the artwork instead of clashing with it.
+                GlassSurface(shape: Rectangle(), tint: palette.surfaceContainer,
+                             border: palette.outline, radius: 0,
+                             showBorder: false, popup: true)
+            } else {
+                palette.surface
+            }
+        }
+        // Same reasoning as the equalizer: the sheet is dark with light text, so
+        // its glass cards must render dark regardless of the system appearance.
+        .environment(\.colorScheme, .dark)
     }
 
     private var header: some View {
@@ -458,8 +471,13 @@ struct AudioChainView: View {
     }
 
     private func isOutputSelected(_ device: AudioOutputDevice) -> Bool {
-        player.selectedOutputUID == device.uid
-            || (player.selectedOutputUID == nil && device.isDefault)
+        // Mirror the device the HAL unit is actually bound to; before playback
+        // starts fall back to the user's selection so the panel agrees with the
+        // Settings page and with where the sound is really going.
+        player.actualOutputUID == device.uid
+            || (player.actualOutputUID == nil
+                && (player.selectedOutputUID == device.uid
+                    || (player.selectedOutputUID == nil && device.isDefault)))
     }
 
     private func shortcutLabel(_ text: String) -> some View {
