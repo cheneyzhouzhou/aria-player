@@ -11,14 +11,34 @@ enum Route: Hashable {
 
 @MainActor
 final class Navigator: ObservableObject {
-    @Published var route: Route?
+    /// Pages pushed on top of the tab's own list, innermost first.
+    ///
+    /// A single `route` could not express "artist → one of that artist's
+    /// albums": opening the album replaced the artist page, so going back
+    /// dropped straight to the library instead of the artist. Keeping the
+    /// whole stack makes back mean "one step", wherever the user came from.
+    @Published private(set) var stack: [Route] = []
+
+    /// The page on screen, or `nil` when a tab's list is showing.
+    var route: Route? { stack.last }
+
+    /// True when there is a page to go back from.
+    var canGoBack: Bool { !stack.isEmpty }
 
     func open(_ route: Route) {
-        withAnimation(.snappy(duration: 0.3)) { self.route = route }
+        withAnimation(.snappy(duration: 0.3)) { stack.append(route) }
     }
 
     func back() {
-        withAnimation(.snappy(duration: 0.3)) { route = nil }
+        guard !stack.isEmpty else { return }
+        withAnimation(.snappy(duration: 0.3)) { stack.removeLast() }
+    }
+
+    /// Leaving the tab — or switching library tabs — drops everything, not just
+    /// the page on top.
+    func reset() {
+        guard !stack.isEmpty else { return }
+        withAnimation(.snappy(duration: 0.3)) { stack.removeAll() }
     }
 }
 
@@ -69,18 +89,19 @@ struct RootView: View {
     @State private var destination: RailDestination = .library
     @State private var tab: LibraryTab = .albums
     @State private var search = ""
+    @ObservedObject private var appearance = AppearanceSettings.shared
     @State private var showNowPlaying = false
 
     /// The chrome's own colour, independent of what's playing.
     private var chrome: M3Palette {
-        M3Palette(seed: palettes.librarySeed, isDark: scheme == .dark)
+        themePalette(seed: palettes.librarySeed, isDark: scheme == .dark)
     }
 
     /// Opening an album re-tints the whole window from its cover.
     private var active: M3Palette {
         if case .album(let album) = nav.route,
            let seed = palettes.seed(for: album.id, artwork: album.artworkTrack) {
-            return M3Palette(seed: seed, isDark: scheme == .dark)
+            return themePalette(seed: seed, isDark: scheme == .dark)
         }
         return chrome
     }
@@ -109,7 +130,11 @@ struct RootView: View {
             .ignoresSafeArea(edges: .top)
 
             if player.current != nil {
-                MiniPlayer(palette: nowPlayingPalette) {
+                // The floating bar sits on the themed window, so in Morandi it
+                // takes the theme palette instead of the artwork's — otherwise
+                // a vivid slab floats on a greige page. The full-screen stage
+                // keeps its artwork colour either way.
+                MiniPlayer(palette: AppearanceSettings.shared.usesMorandi ? active : nowPlayingPalette) {
                     withAnimation(.easeOut(duration: 0.26)) {
                         showNowPlaying = true
                     }
@@ -134,8 +159,8 @@ struct RootView: View {
         .environment(\.palette, active)
         .animation(.easeInOut(duration: 0.45), value: active)
         .animation(.spring(response: 0.4, dampingFraction: 0.9), value: player.current)
-        .onChange(of: destination) { _, _ in nav.back() }
-        .onChange(of: tab) { _, _ in nav.back() }
+        .onChange(of: destination) { _, _ in nav.reset() }
+        .onChange(of: tab) { _, _ in nav.reset() }
     }
 
     // MARK: Rail

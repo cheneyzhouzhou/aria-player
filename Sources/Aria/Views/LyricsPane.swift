@@ -26,6 +26,21 @@ struct LyricsPane: View {
     private var primary: Color { primaryColor ?? palette.onSurface }
     private var secondary: Color { secondaryColor ?? palette.onSurfaceVariant }
 
+    /// Lines dissolve into the background at the top and bottom edges instead
+    /// of being cut off by the pane — the same treatment the macOS stage
+    /// lyrics use, scaled down for the phone's square lyric sheet.
+    private var edgeFade: LinearGradient {
+        LinearGradient(
+            stops: [
+                .init(color: .clear, location: 0),
+                .init(color: .white, location: 0.20),
+                .init(color: .white, location: 0.80),
+                .init(color: .clear, location: 1)
+            ],
+            startPoint: .top, endPoint: .bottom
+        )
+    }
+
     var body: some View {
         ZStack {
             if showsPanel {
@@ -64,6 +79,10 @@ struct LyricsPane: View {
                     .padding(.horizontal, 22)
                     .padding(.vertical, 34)
                 }
+                // Fade the scrolling sheet at both edges, so a line that is
+                // only half in view melts away rather than ending in a hard
+                // cut across the glyphs.
+                .mask(edgeFade)
                 .onAppear { scroll(proxy, to: active, in: lyrics) }
                 .onChange(of: active) { _, new in
                     scroll(proxy, to: new, in: lyrics)

@@ -14,7 +14,9 @@ xcuserdata/
 
 # Generated
 demo-library/
-Resources/AppIcon.icns
-Resources/AppIcon.png
+
+# The app icon source and the compiled .icns are tracked on purpose: CI builds
+# the macOS bundle from a fresh checkout, and without them it would fall back to
+# the placeholder drawn by Tools/MakeIcon.swift instead of the real artwork.
 
 .DS_Store

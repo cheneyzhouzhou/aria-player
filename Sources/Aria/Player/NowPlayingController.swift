@@ -57,34 +57,29 @@ final class NowPlayingController {
             commandTargets.append((command, command.addTarget(handler: handler)))
         }
 
-        add(center.playCommand) { [weak player] _ in
-            player?.resume()
-            return .success
+        /// Transport commands (play/pause/toggle/skip) with a double-fire guard:
+        /// some surfaces dispatch two commands for a single press — iOS Control
+        /// Center sends the play/pause pair *and* the toggle when all three are
+        /// registered, so a press paused and immediately resumed. No human can
+        /// press twice within 150 ms, so the machine's repeat is dropped.
+        func addTransport(_ command: MPRemoteCommand,
+                          _ action: @escaping (AudioPlayer) -> Void) {
+            commandTargets.append((command, command.addTarget { [weak self, weak player] _ in
+                guard let player else { return .commandFailed }
+                if let self, !self.acceptTransport() { return .success }
+                action(player)
+                return .success
+            }))
         }
-        add(center.pauseCommand) { [weak player] _ in
-            player?.pause()
-            return .success
-        }
-        #if os(macOS)
-        // macOS media keys send the toggle. iOS does not get it registered at
-        // all: the Control Center dispatches play/pause *and* the toggle when
-        // both are enabled, so a single press pauses and then immediately
-        // resumes — which is why its play button looked dead while the lock
-        // screen (toggle only) worked. With just the pair registered, every
-        // surface sends one command that does one thing.
-        add(center.togglePlayPauseCommand) { [weak player] _ in
-            player?.togglePlayPause()
-            return .success
-        }
-        #endif
-        add(center.nextTrackCommand) { [weak player] _ in
-            player?.next()
-            return .success
-        }
-        add(center.previousTrackCommand) { [weak player] _ in
-            player?.previous()
-            return .success
-        }
+
+        addTransport(center.playCommand) { $0.resume() }
+        addTransport(center.pauseCommand) { $0.pause() }
+        // The toggle is what wired-headphone remotes send for the middle
+        // button; with it unregistered the button did nothing while
+        // next/previous worked. (macOS media keys send it too.)
+        addTransport(center.togglePlayPauseCommand) { $0.togglePlayPause() }
+        addTransport(center.nextTrackCommand) { $0.next() }
+        addTransport(center.previousTrackCommand) { $0.previous() }
         add(center.changePlaybackPositionCommand) { [weak player] event in
             guard let event = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
             player?.seek(to: event.positionTime)
@@ -100,10 +95,19 @@ final class NowPlayingController {
         center.previousTrackCommand.isEnabled = true
         center.playCommand.isEnabled = true
         center.pauseCommand.isEnabled = true
-        #if os(iOS)
-        center.togglePlayPauseCommand.isEnabled = false
-        #endif
+        center.togglePlayPauseCommand.isEnabled = true
         center.changePlaybackPositionCommand.isEnabled = true
+    }
+
+    /// See `addTransport`: a transport command within 150 ms of the previous
+    /// one is a machine double-fire, not a human. Monotonic clock, so a system
+    /// sleep between the two commands cannot fake a gap.
+    private var lastTransportAt: TimeInterval = 0
+    private func acceptTransport() -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        let ok = now - lastTransportAt > 0.15
+        lastTransportAt = now
+        return ok
     }
 
     // MARK: - Now playing info

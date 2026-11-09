@@ -17,6 +17,9 @@ struct SettingsView: View {
     @EnvironmentObject var player: AudioPlayer
     @StateObject private var lang = LanguageSettings.shared
     @ObservedObject private var appearance = AppearanceSettings.shared
+    #if os(macOS)
+    @ObservedObject private var menuBar = MenuBarSettings.shared
+    #endif
     @Environment(\.colorScheme) private var scheme
 
     /// A folder that was picked but holds no playable file. It is held here so the
@@ -81,11 +84,64 @@ struct SettingsView: View {
 
     #endif
 
+    /// Horizontal inset of the page content. On iOS every tab already sits
+    /// inside the shared glass panel (inset 10pt from the screen edge); the
+    /// library and search lists add another `screenInset` (20pt) on top, so
+    /// their content rests ~30pt in. The settings section cards must use the
+    /// same extra inset, otherwise they hug the panel edge and read as wider
+    /// / overflowing next to the other pages.
+    private var contentInset: CGFloat {
+        #if os(iOS)
+        AppearanceSettings.shared.usesGlass ? screenInset + 10 : screenInset
+        #else
+        screenInset
+        #endif
+    }
+
     private var p: M3Palette {
-        palette ?? M3Palette(seed: palettes.librarySeed, isDark: scheme == .dark)
+        palette ?? themePalette(seed: palettes.librarySeed, isDark: scheme == .dark)
     }
 
     var body: some View {
+        Group {
+            if AppearanceSettings.shared.usesGlass {
+                GeometryReader { geo in
+                    page(glassWidth: geo.size.width)
+                }
+            } else {
+                page(glassWidth: nil)
+            }
+        }
+        #if os(iOS)
+        .alert(readProblem == nil ? L("No music files in that folder") : L("Aria can't open that folder"),
+               isPresented: Binding(get: { emptyFolder != nil },
+                                    set: { if !$0 { emptyFolder = nil; readProblem = nil } })) {
+            Button(L("Choose another")) { emptyFolder = nil; readProblem = nil; addFolder() }
+            if readProblem == nil {
+                Button(L("Add anyway")) {
+                    if let folder = emptyFolder { commit(folder) }
+                    emptyFolder = nil
+                }
+            }
+            Button(L("Cancel"), role: .cancel) { emptyFolder = nil; readProblem = nil }
+        } message: {
+            if let problem = readProblem {
+                Text("\(emptyFolder?.path ?? "")\n\n\(problem)\n\n" + L("iOS only lets an app read a folder it was handed permission for, and a SideStore-signed build sometimes never receives that permission. Copying the music into On My iPhone → Aria from the Files app and adding that folder here works around it."))
+            } else {
+                Text("\(emptyFolder?.path ?? "")\n\n" + L("Aria reads FLAC, ALAC, MP3, AAC, WAV or AIFF, so this folder would show up with nothing in it. The path above is what was picked — if your music lives somewhere else, pick that folder instead."))
+            }
+        }
+        #endif
+    }
+
+    /// The page itself. `glassWidth` is the width the page was actually given,
+    /// and only the glass theme passes one: a vertical `ScrollView` offers its
+    /// content unlimited width, so the greedy section cards report a wider
+    /// ideal size than the page — which pushed the frosted panel out to the
+    /// screen edge and made the cards read wider than every other tab. Pinning
+    /// the content to the available width fixes that. `nil` leaves the width
+    /// unconstrained, which is what Solid and Morandi have always used.
+    private func page(glassWidth: CGFloat?) -> some View {
         ZStack(alignment: .topLeading) {
             if drawsBackdrop { settingsBackdrop }
             ScrollView {
@@ -94,7 +150,6 @@ struct SettingsView: View {
                     .font(.display(40, .semibold))
                     .foregroundStyle(p.onSurface)
                     .padding(.top, 40)
-
                 section(L("Language")) {
                     VStack(alignment: .leading, spacing: 10) {
                         Picker("", selection: $lang.language) {
@@ -118,12 +173,36 @@ struct SettingsView: View {
                         row(L("Light / dark"), L("Choose light or dark, or follow the system."))
                         modePicker
 
-                        row(L("Theme colour"), L("Tints the library. The player takes its colour from the artwork instead."))
-                        HueBar(hue: $palettes.libraryHue, palette: p)
-                            .frame(height: 30)
-                        swatches
+                        if !appearance.usesMorandi {
+                            row(L("Theme colour"), L("Tints the library. The player takes its colour from the artwork instead."))
+                            HueBar(hue: $palettes.libraryHue, palette: p)
+                                .frame(height: 30)
+                            swatches
+                        } else {
+                            row(L("Theme colour"), L("Pick one of the muted Morandi accents. The player still takes its colour from the artwork."))
+                            morandiSwatches
+                        }
                     }
                 }
+
+                #if os(macOS)
+                section(L("Menu bar")) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle(isOn: $menuBar.isEnabled) {
+                            Text(L("Show the song and controls in the menu bar"))
+                                .font(.body(13, .medium))
+                                .foregroundStyle(p.onSurface)
+                        }
+                        .toggleStyle(.switch)
+                        .tint(p.primary)
+
+                        Text(L("Aria keeps the current song in the system menu bar, with play, pause and track skipping one click away."))
+                            .font(.body(11))
+                            .foregroundStyle(p.onSurfaceVariant)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                #endif
 
                 section(L("Music folders")) {
                     VStack(alignment: .leading, spacing: 10) {
@@ -282,7 +361,7 @@ struct SettingsView: View {
 
                 section(L("Library")) {
                     VStack(alignment: .leading, spacing: 14) {
-                        HStack(spacing: 22) {
+                        HStack(spacing: 12) {
                             stat(Lplural(library.tracks.count, "song"))
                             stat(Lplural(library.albums.count, "album"))
                             stat(Lduration(library.totalDuration))
@@ -309,34 +388,15 @@ struct SettingsView: View {
                     }
                 }
             }
-            .padding(.horizontal, screenInset)
+            .padding(.horizontal, contentInset)
             .padding(.bottom, playerClearance)
-            .frame(maxWidth: 640, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(width: glassWidth, alignment: .leading)
         }
         .scrollContentBackground(.hidden)
         }
-        #if os(iOS)
-        .alert(readProblem == nil ? L("No music files in that folder") : L("Aria can't open that folder"),
-               isPresented: Binding(get: { emptyFolder != nil },
-                                    set: { if !$0 { emptyFolder = nil; readProblem = nil } })) {
-            Button(L("Choose another")) { emptyFolder = nil; readProblem = nil; addFolder() }
-            if readProblem == nil {
-                Button(L("Add anyway")) {
-                    if let folder = emptyFolder { commit(folder) }
-                    emptyFolder = nil
-                }
-            }
-            Button(L("Cancel"), role: .cancel) { emptyFolder = nil; readProblem = nil }
-        } message: {
-            if let problem = readProblem {
-                Text("\(emptyFolder?.path ?? "")\n\n\(problem)\n\n" + L("iOS only lets an app read a folder it was handed permission for, and a SideStore-signed build sometimes never receives that permission. Copying the music into On My iPhone → Aria from the Files app and adding that folder here works around it."))
-            } else {
-                Text("\(emptyFolder?.path ?? "")\n\n" + L("Aria reads FLAC, ALAC, MP3, AAC, WAV or AIFF, so this folder would show up with nothing in it. The path above is what was picked — if your music lives somewhere else, pick that folder instead."))
-            }
-        }
-        #endif
     }
+
 
     /// Full-bleed page backdrop. In the glass theme this is one continuous
     /// frosted pane reaching the very top and bottom edges — so iOS no longer
@@ -510,9 +570,17 @@ struct SettingsView: View {
     private func stat(_ text: String) -> some View {
         Text(text)
             .font(.label(12, .semibold))
+            // Three of these share one row; without a single-line cap the
+            // longest one ("260 首歌曲") wraps inside its capsule.
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
             .foregroundStyle(p.onPrimaryContainer)
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 12)
             .padding(.vertical, 7)
+            // `minimumScaleFactor` shrinks the glyphs *and* the line height, so
+            // the longest capsule ended up ~3pt shorter than its neighbours.
+            // A fixed height keeps all three exactly the same pill.
+            .frame(height: 28)
             .background(Capsule().fill(p.primaryContainer))
     }
 
@@ -552,19 +620,68 @@ struct SettingsView: View {
         }
     }
 
-    /// Follow-system / light / dark, as a compact segmented control.
-    private var modePicker: some View {
-        Picker("", selection: Binding(
-            get: { appearance.mode },
-            set: { appearance.setMode($0) }
-        )) {
-            ForEach(AppearanceMode.allCases) { mode in
-                Text(mode.title).tag(mode)
+    /// Preset Morandi accents — twelve dusty hues in two rows: clay, rose,
+    /// oat, mustard, olive, sage on top; celadon, steel, blue, indigo, mauve
+    /// and violet below. The palette desaturates each one further.
+    private var morandiSwatches: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            morandiRow([0.02, 0.05, 0.09, 0.13, 0.20, 0.28])
+            morandiRow([0.42, 0.50, 0.58, 0.66, 0.78, 0.87])
+        }
+    }
+
+    private func morandiRow(_ hues: [Double]) -> some View {
+        HStack(spacing: 10) {
+            ForEach(hues, id: \.self) { hue in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.4)) { appearance.morandiHue = hue }
+                } label: {
+                    Circle()
+                        .fill(Color(hue: hue, saturation: 0.30,
+                                    brightness: scheme == .dark ? 0.55 : 0.82))
+                        .frame(width: 26, height: 26)
+                        .overlay {
+                            Circle().strokeBorder(
+                                p.onSurface.opacity(abs(appearance.morandiHue - hue) < 0.01 ? 0.9 : 0),
+                                lineWidth: 2.5)
+                        }
+                }
+                .buttonStyle(.plain)
             }
         }
-        .labelsHidden()
-        .pickerStyle(.segmented)
-        .frame(maxWidth: 320)
+    }
+
+    /// Follow-system / light / dark, as a compact segmented control.
+    /// Follow-system / light / dark, as three plain buttons. A segmented
+    /// `Picker` on macOS is an AppKit bridge, and flipping the whole window's
+    /// colour scheme inside its action could swallow the first click — plain
+    /// buttons always fire.
+    private var modePicker: some View {
+        HStack(spacing: 8) {
+            ForEach(AppearanceMode.allCases) { mode in
+                let selected = appearance.mode == mode
+                Button {
+                    withAnimation(.easeInOut(duration: 0.3)) { appearance.setMode(mode) }
+                } label: {
+                    Text(mode.title)
+                        .font(.body(12.5, selected ? .semibold : .regular))
+                        .foregroundStyle(selected ? p.onSurface : p.onSurfaceVariant)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 7)
+                        .background {
+                            Capsule().fill(selected
+                                           ? p.primary.opacity(0.22)
+                                           : p.surfaceContainerHigh.opacity(0.65))
+                        }
+                        .overlay {
+                            Capsule().stroke(selected ? p.primary : p.outline.opacity(0.3),
+                                             lineWidth: selected ? 1.5 : 1)
+                        }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 
     /// A selectable preview card for one appearance theme. The glass card renders a
@@ -593,31 +710,46 @@ struct SettingsView: View {
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                                     .stroke(Color.white.opacity(0.45), lineWidth: 1)
                             )
+                    } else if theme.isMorandi {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(morandiSwatch)
                     } else {
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .fill(flat)
                     }
 
                     // Mock content lines so the two previews read as "a panel".
+                    // In the glass theme these are allowed to shorten: three
+                    // cards sit side by side, and a hard 56pt line made each
+                    // card refuse to shrink below ~104pt, so the row overflowed
+                    // the page and pushed it wider than the frosted panel.
+                    // Solid and Morandi keep the fixed line, untouched.
                     VStack(alignment: .leading, spacing: 5) {
-                        Capsule().fill(Color.white.opacity(0.55))
-                            .frame(width: 56, height: 7)
-                        Capsule().fill(Color.white.opacity(0.32))
-                            .frame(width: 36, height: 7)
+                        mockLine(opacity: 0.55, width: 56)
+                        mockLine(opacity: 0.32, width: 36)
                     }
                     .padding(12)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                 }
                 .frame(height: 72)
-
-                HStack(spacing: 6) {
+                // The tick sits on the preview instead of beside the name:
+                // three cards share ~87pt each, and an inline icon left only
+                // ~43pt for the title — enough to break "Frosted glass" into
+                // one letter per line. On the artwork it costs no width.
+                .overlay(alignment: .topTrailing) {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 14))
-                        .foregroundStyle(isSelected ? Color.accentColor : palette.onSurfaceVariant)
-                    Text(theme.title)
-                        .font(.body(13, .semibold))
-                        .foregroundStyle(palette.onSurface)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(isSelected ? Color.white : Color.white.opacity(0.55))
+                        .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
+                        .padding(7)
                 }
+
+                Text(theme.title)
+                    .font(.body(12.5, .semibold))
+                    .foregroundStyle(palette.onSurface)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(12)
             .frame(maxWidth: .infinity)
@@ -635,6 +767,17 @@ struct SettingsView: View {
         .buttonStyle(.plain)
     }
 
+    private func mockLine(opacity: Double, width: CGFloat) -> some View {
+        let line = Capsule().fill(Color.white.opacity(opacity))
+        return Group {
+            if AppearanceSettings.shared.usesGlass {
+                line.frame(maxWidth: width, maxHeight: 7)
+            } else {
+                line.frame(width: width, height: 7)
+            }
+        }
+    }
+
     private var gradient: LinearGradient {
         LinearGradient(colors: [
             Color(hue: 0.60, saturation: 0.55, brightness: scheme == .dark ? 0.45 : 0.85),
@@ -644,6 +787,12 @@ struct SettingsView: View {
 
     private var flat: Color {
         Color(hue: 0.62, saturation: 0.22, brightness: scheme == .dark ? 0.30 : 0.95)
+    }
+
+    /// The Morandi preview: the theme's default dusty sage accent on a greige
+    /// panel — what the theme actually lands on.
+    private var morandiSwatch: Color {
+        Color(hue: 0.28, saturation: 0.13, brightness: scheme == .dark ? 0.52 : 0.80)
     }
 }
 

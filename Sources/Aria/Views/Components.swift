@@ -14,6 +14,12 @@ struct PillButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.label(size, .semibold))
+            // A pill is sized by its own text; letting the label compress turns
+            // "Shuffle" into one letter per line when the row runs out of
+            // room. Keeping it at its ideal width makes the enclosing
+            // `ViewThatFits` notice and pick a layout that actually fits.
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .foregroundStyle(foreground)
             .padding(padding)
             .background(background)

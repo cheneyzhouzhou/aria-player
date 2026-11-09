@@ -11,13 +11,18 @@ struct M3Palette: Equatable {
     var isDark: Bool
     /// Now-playing surfaces lean much harder into the colour than list screens.
     var vivid: Bool = false
+    /// Multiplies every derived saturation. The Morandi theme keeps the same
+    /// tone ladder — surfaces, accents, foregrounds — while pulling the colour
+    /// out of it; the seed's own chroma cannot go that low, because the tone
+    /// roles below assume a palette with some life in it.
+    var chromaScale: Double = 1
 
     /// Greyscale artwork should yield a greyscale interface, but anything with
     /// real colour gets a floor — otherwise muted covers tint to near-black and
     /// the whole dynamic-colour effect disappears.
     private var chroma: Double {
         guard seed.chroma > 0.03 else { return 0 }
-        return min(max(seed.chroma, 0.55) * 1.1, 1)
+        return min(max(seed.chroma, 0.55) * 1.1, 1) * chromaScale
     }
 
     private func tone(_ saturation: Double, _ brightness: Double) -> Color {
@@ -64,6 +69,16 @@ struct M3Palette: Equatable {
     }
 
     static let fallback = M3Palette(seed: .indigo, isDark: true)
+
+    /// Morandi: one fixed, dusty hue for the whole interface, with the derived
+    /// saturation pulled far down. The result is the quiet, greyed palette —
+    /// greige surfaces, taupe accents — rather than anything taken from the
+    /// artwork.
+    static func morandi(hue: Double, isDark: Bool, vivid: Bool = false,
+                        chromaScale: Double = 0.36) -> M3Palette {
+        M3Palette(seed: PaletteSeed(hue: hue, chroma: 0.75),
+                  isDark: isDark, vivid: vivid, chromaScale: chromaScale)
+    }
 }
 
 private struct PaletteKey: EnvironmentKey {

@@ -9,6 +9,9 @@ struct AriaApp: App {
     @StateObject private var lang = LanguageSettings.shared
     @StateObject private var appearance = AppearanceSettings.shared
     private let nowPlaying = NowPlayingController()
+    /// The library scan and system wiring run once per app launch; later runs
+    /// of the bootstrap task skip the scan.
+    @State private var didBootstrap = false
 
     /// Shared setup for both platforms: wire up the system now-playing bridge,
     /// then reconcile the cached library with what's actually on disk.
@@ -37,6 +40,10 @@ struct AriaApp: App {
             .frame(minWidth: 1000, minHeight: 660)
             .task {
                 nowPlaying.attach(to: player)
+                // The menu-bar player: attach() installs the status item when
+                // the setting is on (the default) and follows it afterwards.
+                MenuBarPlayer.shared.attach(to: player)
+
                 await library.scan()
             }
         #endif
@@ -44,10 +51,9 @@ struct AriaApp: App {
 
     var body: some Scene {
         WindowGroup {
-            root
-                // Applies the in-app Light / Dark choice to the whole window
-                // (and every palette/glass surface that reads `colorScheme`).
-                .preferredColorScheme(appearance.mode.colorScheme)
+            AppearanceGate {
+                root
+            }
         }
         #if os(macOS)
         // The app draws its own header, so the system title bar gets out of the way.
@@ -90,15 +96,16 @@ struct AriaApp: App {
 
         #if os(macOS)
         Settings {
-            SettingsView()
+            AppearanceGate {
+                SettingsView()
                 .environmentObject(library)
                 .environmentObject(palettes)
                 .environmentObject(playlists)
                 .environmentObject(player)
                 .environment(\.locale, lang.language.locale)
                 .id(lang.language)
-                .preferredColorScheme(appearance.mode.colorScheme)
                 .frame(width: 560, height: 620)
+            }
         }
         #endif
     }

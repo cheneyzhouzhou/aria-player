@@ -146,6 +146,7 @@ struct MacPlaybackStage: View {
     @StateObject private var chrome = ChromeVisibility()
     @StateObject private var backdrop = StageBackdrop()
     @State private var showQueue = false
+    @ObservedObject private var appearance = AppearanceSettings.shared
     @State private var showEQ = false
     @State private var showAudioChain = false
     @State private var showLyrics = true

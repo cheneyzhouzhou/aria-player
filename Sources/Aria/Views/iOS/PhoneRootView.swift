@@ -11,6 +11,7 @@ struct PhoneRootView: View {
     @StateObject private var nav = Navigator()
     @Environment(\.colorScheme) private var scheme
 
+    @ObservedObject private var appearance = AppearanceSettings.shared
     @State private var destination: RailDestination = .library
     @State private var tab: LibraryTab = .albums
     @State private var search = ""
@@ -23,13 +24,13 @@ struct PhoneRootView: View {
     @State private var backSwipeOffset: CGFloat = 0
 
     private var chrome: M3Palette {
-        M3Palette(seed: palettes.librarySeed, isDark: scheme == .dark)
+        themePalette(seed: palettes.librarySeed, isDark: scheme == .dark)
     }
 
     private var active: M3Palette {
         if case .album(let album) = nav.route,
            let seed = palettes.seed(for: album.id, artwork: album.artworkTrack) {
-            return M3Palette(seed: seed, isDark: scheme == .dark)
+            return themePalette(seed: seed, isDark: scheme == .dark)
         }
         return chrome
     }
@@ -60,23 +61,18 @@ struct PhoneRootView: View {
                                             style: .continuous))
                 .padding(.horizontal, AppearanceSettings.shared.usesGlass ? 10 : 0)
                 .padding(.top, AppearanceSettings.shared.usesGlass ? 6 : 0)
-                // Native-style edge swipe back: a thin strip along the left
-                // edge owns the gesture (a plain gesture on the page would be
-                // swallowed by the list's ScrollView). The whole page follows
-                // the finger; album, artist and playlist detail all use it.
-                .overlay(alignment: .leading) {
-                    if nav.route != nil {
-                        Color.clear
-                            .frame(width: 18)
-                            .contentShape(Rectangle())
-                            .highPriorityGesture(backSwipe)
-                    }
-                }
+                // Swipe back from anywhere on the page, the same idea as the
+                // player's pull-to-dismiss. This used to be an 18pt strip on
+                // the left edge, which a normal swipe mostly missed.
+                // `simultaneousGesture` leaves the detail lists scrolling
+                // vertically as usual; `backSwipe` only claims the drag once it
+                // is clearly horizontal and rightward.
                 .offset(x: nav.route != nil ? backSwipeOffset : 0)
+                .simultaneousGesture(backSwipe)
 
             VStack(spacing: 10) {
                 if player.current != nil {
-                    PhoneMiniPlayer(palette: nowPlayingPalette) {
+                    PhoneMiniPlayer(palette: AppearanceSettings.shared.usesMorandi ? active : nowPlayingPalette) {
                         showNowPlaying = true
                     }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -89,8 +85,8 @@ struct PhoneRootView: View {
         .environment(\.palette, active)
         .animation(.easeInOut(duration: 0.45), value: active)
         .animation(.spring(response: 0.4, dampingFraction: 0.9), value: player.current)
-        .onChange(of: destination) { _, _ in nav.back() }
-        .onChange(of: tab) { _, _ in nav.back() }
+        .onChange(of: destination) { _, _ in nav.reset() }
+        .onChange(of: tab) { _, _ in nav.reset() }
         .fullScreenCover(isPresented: $showNowPlaying) {
             PhoneNowPlayingView(palette: nowPlayingPalette) { showNowPlaying = false }
                 .environmentObject(player)
@@ -109,6 +105,13 @@ struct PhoneRootView: View {
                     Spacer()
                 }
                 .padding(.horizontal, 18)
+                // In the glass theme this page is a rounded card. With no top
+                // inset the 40pt back button sat right inside the 26pt corner
+                // arc, so its left margin read as a few points while the side
+                // inset was 18 — the button looked jammed into the curve. This
+                // lifts it to the same distance as the side inset. Solid and
+                // Morandi have no card, so they keep the original spacing.
+                .padding(.top, AppearanceSettings.shared.usesGlass ? 20 : 0)
                 .padding(.bottom, 2)
 
                 switch route {
@@ -153,6 +156,12 @@ struct PhoneRootView: View {
             Text(L("Library"))
                 .font(.display(34, .semibold))
                 .foregroundStyle(active.onSurface)
+                // In the glass theme the page sits inside the floating panel, and
+                // without this the title's cap-height lands ~14pt from the
+                // panel's top edge — visibly tighter than the Search and
+                // Settings pages, which both use 40pt. Only the glass theme
+                // needs it; Solid and Morandi are unchanged.
+                .padding(.top, AppearanceSettings.shared.usesGlass ? 22 : 0)
                 .padding(.horizontal, 22)
                 .padding(.bottom, 14)
 
@@ -236,29 +245,34 @@ struct PhoneRootView: View {
             }
     }
 
-    // MARK: Swipe back from the left edge
+    // MARK: Swipe back
 
-    /// Native-style back gesture for the detail pages (album / artist /
-    /// playlist). It only engages when the drag starts within the left edge and
-    /// is mostly horizontal, so the vertical lists and any horizontal content
-    /// underneath keep working. The page follows the finger and pops when the
-    /// travel (or flick) passes the threshold, otherwise springs back.
+    /// Swipe-back for the detail pages (album / artist / playlist). It answers
+    /// a drag that starts **anywhere** on the page — the old version required
+    /// the drag to begin inside a 28pt strip on the left edge, which is why it
+    /// so often felt dead. The ratio guard is what protects the vertical lists:
+    /// a drag that is not clearly more horizontal than vertical is left
+    /// entirely to the ScrollView underneath, and only a rightward one moves
+    /// the page. The page follows the finger and pops when the travel (or the
+    /// flick) passes the threshold, otherwise springs back.
     private var backSwipe: some Gesture {
-        DragGesture(minimumDistance: 12)
+        DragGesture(minimumDistance: 18)
             .onChanged { value in
-                guard nav.route != nil, value.startLocation.x < 28 else { return }
+                guard nav.route != nil else { return }
                 let dx = value.translation.width
                 let dy = value.translation.height
-                guard dx > 0, abs(dx) > abs(dy) * 1.2 else { return }
+                guard dx > 0, dx > abs(dy) * 1.8 else { return }
                 backSwipeOffset = dx
             }
             .onEnded { value in
-                guard nav.route != nil, value.startLocation.x < 28 else { return }
+                guard nav.route != nil else { return }
                 let dx = value.translation.width
                 let dy = value.translation.height
                 let flick = value.predictedEndTranslation.width
-                let passed = abs(dx) > abs(dy) * 1.2
-                    && (dx > 90 || (dx > 30 && flick > 160))
+                // Same guard as `onChanged`: releasing a vertical scroll must
+                // not pop the page.
+                let horizontal = dx > 0 && dx > abs(dy) * 1.8
+                let passed = horizontal && (dx > 80 || (dx > 30 && flick > 150))
                 if passed {
                     // Popping swaps the content out; zero the offset first so the
                     // library never inherits a shifted page.

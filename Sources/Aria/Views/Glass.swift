@@ -2,20 +2,31 @@ import SwiftUI
 
 // MARK: - Theme selection
 
-/// The two presentation themes Aria offers.
+/// The presentation themes Aria offers.
 ///
-/// - `solid`  — the original Material-style flat colour (current app look).
-/// - `glass`  — raised panels become frosted, themed glass that blurs whatever
-///              sits behind them. The whole window shares one soft gradient
-///              field so the result reads as a single cohesive surface, rather
-///              than the many separate floating cards some players use.
+/// - `solid`   — the original Material-style flat colour, tinted from the
+///               library hue.
+/// - `morandi` — the same flat surfaces, but painted from one fixed, dusty
+///               palette instead of the artwork/library hue.
+/// - `glass`   — raised panels become frosted, themed glass that blurs whatever
+///               sits behind them. The whole window shares one soft gradient
+///               field so the result reads as a single cohesive surface, rather
+///               than the many separate floating cards some players use.
 enum AppearanceTheme: String, CaseIterable, Identifiable {
-    case solid, glass
+    case solid, morandi, glass
     var id: String { rawValue }
 
-    var title: String { self == .solid ? L("Solid") : L("Frosted glass") }
+    var title: String {
+        switch self {
+        case .solid: return L("Solid")
+        case .morandi: return L("Morandi")
+        case .glass: return L("Frosted glass")
+        }
+    }
     /// Lets the settings picker draw a representative mock for each option.
     var isGlass: Bool { self == .glass }
+    /// Flat surfaces painted from a fixed palette rather than a seed.
+    var isMorandi: Bool { self == .morandi }
 }
 
 /// Light / dark appearance, independent of the system setting.
@@ -53,12 +64,32 @@ final class AppearanceSettings: ObservableObject {
     @Published var theme: AppearanceTheme
     /// Light / dark / follow-system, applied app-wide via `preferredColorScheme`.
     @Published var mode: AppearanceMode
+    /// The Morandi theme's accent hue (the dusty presets in Settings pick from
+    /// these); persisted so the palette survives relaunches.
+    @Published var morandiHue: Double {
+        didSet { UserDefaults.standard.set(morandiHue, forKey: "ariaMorandiHue") }
+    }
 
     init() {
         let raw = UserDefaults.standard.string(forKey: "ariaAppearanceTheme")
         theme = AppearanceTheme(rawValue: raw ?? "") ?? .solid
+        // Fresh installs ship with Light (打包默认); an explicit choice always
+        // wins over the default.
         let rawMode = UserDefaults.standard.string(forKey: "ariaAppearanceMode")
-        mode = AppearanceMode(rawValue: rawMode ?? "") ?? .system
+        if rawMode == nil {
+            mode = .light
+            UserDefaults.standard.set("light", forKey: "ariaAppearanceMode")
+        } else {
+            mode = AppearanceMode(rawValue: rawMode ?? "") ?? .light
+        }
+        morandiHue = UserDefaults.standard.object(forKey: "ariaMorandiHue") as? Double ?? 0.28
+        #if os(macOS)
+        systemIsDark = UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil, queue: .main
+        ) { [weak self] _ in self?.syncSystemDark() }
+        #endif
     }
 
     /// Persist and publish in one step.
@@ -73,6 +104,70 @@ final class AppearanceSettings: ObservableObject {
     }
 
     var usesGlass: Bool { theme == .glass }
+    var usesMorandi: Bool { theme == .morandi }
+
+    /// What the **system** appearance is right now — read from the global
+    /// `AppleInterfaceStyle` default rather than the app's own resolved
+    /// appearance, which `preferredColorScheme` overrides and would make the
+    /// answer circular. Updated whenever macOS broadcasts a theme change.
+    #if os(macOS)
+    @Published private(set) var systemIsDark: Bool {
+        didSet { }
+    }
+    #endif
+
+    #if os(macOS)
+    private func syncSystemDark() {
+        let dark = UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"
+        if dark != systemIsDark { systemIsDark = dark }
+    }
+    #endif
+}
+
+/// Applies the chosen appearance to a whole subtree while still being able to
+/// *see* the system scheme.
+///
+/// The usual way to express "follow system" is `preferredColorScheme(nil)`, and
+/// SwiftUI has a quirk there: *removing* an override does not re-resolve the
+/// effective scheme, so the window keeps the old look until the next unrelated
+/// update — the "have to tap twice" bug. Instead, this wrapper reads the system
+/// scheme from its own environment (nothing above it overrides it) and always
+/// applies an **explicit** resolved scheme below, which updates immediately and
+/// keeps following the system afterwards.
+struct AppearanceGate<Content: View>: View {
+    @ObservedObject private var appearance = AppearanceSettings.shared
+    @Environment(\.colorScheme) private var systemScheme
+    @ViewBuilder var content: () -> Content
+
+    /// The scheme applied below the gate. macOS always gets an explicit value
+    /// (never `nil`): removing the override is what made 跟随系统 need a second
+    /// click. iOS follows the system natively.
+    private var resolvedScheme: ColorScheme? {
+        #if os(macOS)
+        appearance.mode == .system
+            ? (appearance.systemIsDark ? .dark : .light)
+            : appearance.mode.colorScheme
+        #else
+        appearance.mode == .system ? nil : appearance.mode.colorScheme
+        #endif
+    }
+
+    var body: some View {
+        content()
+            .preferredColorScheme(resolvedScheme)
+    }
+}
+
+/// The palette a window paints with, given the chosen theme.
+///
+/// Only the Morandi theme overrides the seed — everything else keeps taking its
+/// colour from the library hue (or the artwork, on the player). The full-screen
+/// player deliberately does not go through here: it always keeps its
+/// artwork-derived palette, and only its popups follow the theme.
+func themePalette(seed: PaletteSeed, isDark: Bool, vivid: Bool = false) -> M3Palette {
+    AppearanceSettings.shared.usesMorandi
+        ? .morandi(hue: AppearanceSettings.shared.morandiHue, isDark: isDark, vivid: vivid)
+        : M3Palette(seed: seed, isDark: isDark, vivid: vivid)
 }
 
 // MARK: - Frosted blur
@@ -253,6 +348,16 @@ func AppBackground(_ palette: M3Palette) -> some View {
 /// light-on-dark text stays legible. Solid and glass differ only in how the
 /// panel is rendered (opaque vs frosted), never in where its colour comes from.
 func playerOverlayPalette(_ palette: M3Palette) -> M3Palette {
+    // Morandi takes the same fixed palette as the rest of the window, in its
+    // dark register, so the popups belong to the theme even though the stage
+    // behind them keeps its artwork colour.
+    if AppearanceSettings.shared.usesMorandi {
+        // vivid + a higher chroma scale than the windows: a popup floating on
+        // the dark stage needs its dusty colour to be *readable*, or every hue
+        // looks like the same grey slab.
+        return .morandi(hue: AppearanceSettings.shared.morandiHue,
+                        isDark: true, vivid: true, chromaScale: 0.62)
+    }
     let seed = PaletteSeed(hue: palette.seed.hue,
                            chroma: min(palette.seed.chroma, 0.18))
     return M3Palette(seed: seed, isDark: true, vivid: false)

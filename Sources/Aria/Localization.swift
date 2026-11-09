@@ -88,6 +88,8 @@ enum L10n {
         // Settings — appearance / theme
         "Theme": "主题",
         "Solid": "纯色",
+        "Morandi": "莫兰迪",
+        "Pick one of the muted Morandi accents. The player still takes its colour from the artwork.": "从莫兰迪灰调主色中选择一种，播放页仍取自专辑封面。",
         "Frosted glass": "毛玻璃",
         "Light / dark": "深浅模式",
         "System": "跟随系统",
@@ -302,6 +304,13 @@ enum L10n {
         "Off": "关闭",
         "All": "列表循环",
         "One": "单曲循环",
+
+        // Menu-bar player (macOS)
+        "Menu bar": "菜单栏",
+        "Show the song and controls in the menu bar": "在菜单栏显示歌曲与控制",
+        "Aria keeps the current song in the system menu bar, with play, pause and track skipping one click away.": "在系统菜单栏常驻当前歌曲，点一下即可播放、暂停与切歌。",
+        "Show Aria": "显示 Aria",
+        "Quit Aria": "退出 Aria",
 
         // Misc
         "no music here": "这里没有音乐",
