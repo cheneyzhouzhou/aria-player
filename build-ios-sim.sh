@@ -47,9 +47,19 @@ cat > "$APP/Info.plist" <<'PLIST'
     <key>LSSupportsOpeningDocumentsInPlace</key><true/>
     <!-- Playback survives lock and backgrounding. -->
     <key>UIBackgroundModes</key><array><string>audio</string></array>
+    <!-- Same key as Resources/iOS-Info.plist: touching the media library
+         without it terminates the app, even when the query returns nothing. -->
+    <key>NSAppleMusicUsageDescription</key><string>Aria reads your Music app library only to play DRM-free songs you already own. It never copies or uploads your music.</string>
 </dict>
 </plist>
 PLIST
+
+# The inline template says 1.0. Stamp the release number so the settings
+# footer on the simulator matches the device and macOS bundles.
+SIM_VERSION="$(tr -dc '0-9' < VERSION 2>/dev/null || true)"
+[ -n "$SIM_VERSION" ] || SIM_VERSION=1
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $SIM_VERSION" "$APP/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $SIM_VERSION" "$APP/Info.plist"
 
 echo "==> Installing on booted simulator"
 xcrun simctl install booted "$APP"

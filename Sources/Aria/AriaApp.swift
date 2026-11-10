@@ -1,7 +1,14 @@
 import SwiftUI
 
+#if os(macOS)
+import AppKit
+#endif
+
 @main
 struct AriaApp: App {
+    #if os(macOS)
+    @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var appDelegate
+    #endif
     @StateObject private var library = LibraryStore()
     @StateObject private var player = AudioPlayer()
     @StateObject private var palettes = PaletteStore()
@@ -38,6 +45,9 @@ struct AriaApp: App {
             .environment(\.locale, lang.language.locale)
             .id(lang.language)
             .frame(minWidth: 1000, minHeight: 660)
+            // Give the app delegate SwiftUI's `openWindow` action so a closed
+            // main window can be recreated (see MacWindowBridge below).
+            .background { MacWindowBridgeRegistrar() }
             .task {
                 nowPlaying.attach(to: player)
                 // The menu-bar player: attach() installs the status item when
@@ -50,7 +60,7 @@ struct AriaApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             AppearanceGate {
                 root
             }
@@ -110,3 +120,55 @@ struct AriaApp: App {
         #endif
     }
 }
+
+#if os(macOS)
+/// Keeping the menu-bar player alive means the process survives its last
+/// window being closed — playback continues, which is what we want. The flip
+/// side is that SwiftUI no longer has a window to reactivate: clicking the Dock
+/// icon (or "Show All Windows") sends a reopen event that nobody handled,
+/// leaving Aria running but invisible. These two hooks close that gap.
+private final class MacAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication,
+                                       hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { MacWindowBridge.shared.restore() }
+        NSApp.activate(ignoringOtherApps: true)
+        return true
+    }
+}
+
+/// Shared by the app delegate and the menu-bar player's "Show Aria" item.
+final class MacWindowBridge {
+    static let shared = MacWindowBridge()
+    private init() {}
+    /// Supplied by the window content once SwiftUI's `openWindow` is available.
+    var reopen: (() -> Void)?
+
+    func restore() {
+        // A closed-but-retained window only needs ordering back in.
+        if let window = NSApp.windows.first(where: {
+            $0.canBecomeMain && !($0 is NSPanel)
+        }) {
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            // SwiftUI released it entirely: ask the scene for a fresh one.
+            reopen?()
+        }
+    }
+}
+
+private struct MacWindowBridgeRegistrar: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
+            .onAppear {
+                MacWindowBridge.shared.reopen = { openWindow(id: "main") }
+            }
+    }
+}
+#endif

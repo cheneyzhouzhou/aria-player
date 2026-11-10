@@ -35,6 +35,11 @@
         <string>audio</string>
     </array>
 
+    <!-- Music app library access is opt-in from Settings. Without this key
+         iOS terminates the app the moment it touches the media library. -->
+    <key>NSAppleMusicUsageDescription</key>
+    <string>Aria reads your Music app library only to play DRM-free songs you already own. It never copies or uploads your music.</string>
+
     <key>UILaunchScreen</key>
     <dict/>
     <key>UIApplicationSupportsIndirectInputEvents</key>

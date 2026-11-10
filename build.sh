@@ -89,6 +89,14 @@ assemble() {
     cp "$binary" "$dest/Contents/MacOS/Aria"
     cp Resources/Info.plist "$dest/Contents/Info.plist"
     cp Resources/AppIcon.icns "$dest/Contents/Resources/AppIcon.icns"
+    # The template plist says 1.0. Stamp the same version the zip is named
+    # after, or the settings page would keep claiming every build is v1.0.
+    # build-ipa.sh already does this for the device bundle; both platforms
+    # must agree with VERSION (and with the GitHub tag).
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$dest/Contents/Info.plist" 2>/dev/null \
+        || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VERSION" "$dest/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$dest/Contents/Info.plist" 2>/dev/null \
+        || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $VERSION" "$dest/Contents/Info.plist"
     # Ad-hoc signature: enough for macOS to grant the app a stable TCC identity.
     codesign --force --sign - --timestamp=none "$dest" 2>/dev/null || true
 }

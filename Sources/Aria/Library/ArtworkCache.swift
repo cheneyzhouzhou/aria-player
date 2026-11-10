@@ -25,6 +25,12 @@ final class ArtworkCache {
         cache.object(forKey: key as NSString)
     }
 
+    /// Stores an image the caller already decoded — the Music app hands us
+    /// ready-made `MPMediaItemArtwork`, so there is nothing to read off disk.
+    func store(_ image: PlatformImage, for key: String) {
+        cache.setObject(image, forKey: key as NSString)
+    }
+
     /// Returns art for `track`, decoding off the main thread if needed.
     func artwork(for track: Track, key: String, completion: @escaping (PlatformImage?) -> Void) {
         if let hit = cached(for: key) {

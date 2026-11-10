@@ -30,6 +30,11 @@ struct Track: Identifiable, Hashable, Codable {
     /// over this — see `Lyrics.load(for:)`.
     var lyrics: String?
 
+    /// Songs that live in the Music app rather than in one of our folders.
+    /// Their URLs use the `ipod-library://` scheme, which `AVAudioFile` cannot
+    /// open; the player routes these through AVPlayer instead.
+    var isMediaLibraryItem: Bool { url.scheme?.lowercased() == "ipod-library" }
+
     /// Albums are keyed by album artist + title so two soundtracks sharing a
     /// name don't collapse into one.
     var albumKey: String { "\(albumArtist.lowercased())::\(album.lowercased())" }
@@ -52,6 +57,9 @@ struct Track: Identifiable, Hashable, Codable {
     }
 
     var qualityLabel: String {
+        // The Music app does not expose a file size or sample rate for these
+        // items, so a "0.0 kHz" readout would be a lie.
+        if isMediaLibraryItem { return L("Music app") }
         let rate = String(format: "%.1f", Double(sampleRate) / 1000)
         // Lossy codecs have no sample word length, so the bitrate is the number
         // worth showing instead of a misleading "0-bit".

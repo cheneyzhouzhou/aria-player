@@ -218,7 +218,7 @@ struct MacPlaybackStage: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         ZStack {
-            Color.black.opacity(0.38)
+            Color.black.opacity(0.12)
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
                 .onTapGesture { isShown.wrappedValue = false }
@@ -416,10 +416,15 @@ struct MacPlaybackStage: View {
 
                 HStack(spacing: 14) {
                     volumeChip
+                    // 30 rather than the transport's 34: this cluster shares a
+                    // fixed 230pt slot with the volume slider, and 34 would
+                    // start eating into it. Still comfortably bigger than the
+                    // 26 these had when they were hard to hit.
                     stageIcon("slider.vertical.3", active: player.eqEnabled,
-                              help: L("Open equalizer")) { showEQ = true }
+                              help: L("Open equalizer"), hitSize: 30) { showEQ = true }
                     stageIcon("music.note.list", active: showQueue,
-                              help: showQueue ? L("Hide queue") : L("Show queue")) {
+                              help: showQueue ? L("Hide queue") : L("Show queue"),
+                              hitSize: 30) {
                         chrome.noteActivity()
                         withAnimation(.easeOut(duration: 0.24)) { showQueue.toggle() }
                     }
@@ -439,7 +444,10 @@ struct MacPlaybackStage: View {
     }
 
     private var transport: some View {
-        HStack(spacing: 24) {
+        // Spacing shrinks as the hit frames grow, so the glyphs stay exactly
+        // where they were: 34 + 16 == 26 + 24. The two side groups are still
+        // 100pt each, which keeps the play button dead centre.
+        HStack(spacing: 16) {
             stageIcon("shuffle", active: player.isShuffled,
                       help: player.isShuffled ? L("Turn shuffle off") : L("Turn shuffle on")) {
                 player.isShuffled.toggle()
@@ -452,6 +460,11 @@ struct MacPlaybackStage: View {
                     .foregroundStyle(.white)
                     .frame(width: 42, height: 42)
                     .background(Circle().stroke(.white.opacity(0.55), lineWidth: 1.3))
+                    // Both symbols are thin: the pause bars are 6pt wide and the
+                    // play triangle only fills part of its box, so without this
+                    // the ring looked like a button but only the drawn pixels
+                    // answered the click. The whole disc is the target now.
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
             .help(player.isPlaying ? L("Pause") : L("Play"))
@@ -516,8 +529,13 @@ struct MacPlaybackStage: View {
     /// `contentShape` has to sit on the Image inside the label; without it
     /// the empty part of the frame is not clickable, and a larger frame alone
     /// just moves the glyph.
+    ///
+    /// 34pt is the transport default: at 26 the box was barely bigger than the
+    /// 14pt glyph, so shuffle / previous / next / repeat all felt like they had
+    /// to be hit dead on. The glyph size is unchanged — only the invisible box
+    /// grew, with the row's spacing reduced to match.
     private func stageIcon(_ system: String, active: Bool = false,
-                           help: String, hitSize: CGFloat = 26,
+                           help: String, hitSize: CGFloat = 34,
                            action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: system)
@@ -538,7 +556,10 @@ struct MacPlaybackStage: View {
             Image(systemName: "waveform")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.72))
-                .frame(width: 26, height: 26)
+                .frame(width: 30, height: 30)
+                // Same reason as `stageIcon`: the waveform glyph is narrower
+                // than its box, so without this only the strokes took clicks.
+                .contentShape(Rectangle())
                 .overlay(alignment: .topTrailing) {
                     Circle()
                         .fill(quality.color)

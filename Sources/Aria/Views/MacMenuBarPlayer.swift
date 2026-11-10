@@ -45,7 +45,13 @@ final class MenuBarPlayer: NSObject, NSMenuDelegate {
 
     /// Long titles would push every other status item aside.
     private static let maxTitleLength = 26
+    /// Long titles are capped so they never push every other status item aside.
     private static let maxTitleWidth: CGFloat = 170
+    /// The status bar pins an item's RIGHT edge. When this item's length changes
+    /// macOS moves its left edge, so the transport buttons on the right stay at
+    /// the same screen position even though the title changes width. A fixed
+    /// row width is neither needed nor desirable: it leaves a wide dead gap
+    /// between a short title and the buttons.
     private static let glyphSize: CGFloat = 17
 
     private var item: NSStatusItem?
@@ -167,10 +173,11 @@ final class MenuBarPlayer: NSObject, NSMenuDelegate {
         iconView.frame = NSRect(x: x, y: (height - 14) / 2, width: 14, height: 14)
         x += 14 + 5
 
-        // Measure the rendered string, not the cell's ideal width: the cell's
-        // padding made the label truncate a title that still had room.
+        // Round the measured width: keeping every x an integer means
+        // `item.length` and the glyph origins move in lockstep, so the buttons
+        // do not jitter by half a point on a track change.
         titleLabel.sizeToFit()
-        let titleWidth = min(titleLabel.frame.width + 1, Self.maxTitleWidth)
+        let titleWidth = ceil(min(titleLabel.frame.width + 1, Self.maxTitleWidth))
         titleLabel.frame = NSRect(x: x, y: (height - 17) / 2, width: titleWidth, height: 17)
         x += titleWidth + 6
 
@@ -181,6 +188,8 @@ final class MenuBarPlayer: NSObject, NSMenuDelegate {
         }
         x += 4
 
+        // Only the left edge of the status item follows the title; its right
+        // edge — and therefore the three controls — is anchored by macOS.
         item.length = ceil(x)
         button.toolTip = player?.current.map { "\($0.title) — \($0.artist)" } ?? L("Aria")
     }
@@ -206,7 +215,8 @@ final class MenuBarPlayer: NSObject, NSMenuDelegate {
     }
 
     private func statusTitle() -> String {
-        guard let track = player?.current else { return "" }
+        // A placeholder keeps the row identifiable before anything is playing.
+        guard let track = player?.current else { return "Aria" }
         let name = track.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard name.count > Self.maxTitleLength else { return name }
         return String(name.prefix(Self.maxTitleLength - 1)) + "…"
@@ -371,8 +381,9 @@ final class MenuBarPlayer: NSObject, NSMenuDelegate {
 
     @objc private func showApp() {
         NSApp.activate(ignoringOtherApps: true)
-        NSApp.windows.first { $0.canBecomeMain && !($0 is NSPanel) }?
-            .makeKeyAndOrderFront(nil)
+        // The main window may have been closed entirely; go through the same
+        // restore path as the Dock reopen event instead of assuming a live one.
+        MacWindowBridge.shared.restore()
     }
 
     @objc private func quitApp() {

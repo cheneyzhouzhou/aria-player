@@ -19,6 +19,8 @@ struct SettingsView: View {
     @ObservedObject private var appearance = AppearanceSettings.shared
     #if os(macOS)
     @ObservedObject private var menuBar = MenuBarSettings.shared
+    #else
+    @ObservedObject private var mediaLibrary = MediaLibraryAccess.shared
     #endif
     @Environment(\.colorScheme) private var scheme
 
@@ -39,13 +41,40 @@ struct SettingsView: View {
         }
         #else
         Platform.chooseFolder(startingAt: library.rootPath) { path in
-            Task {
-                await library.addSource(URL(fileURLWithPath: path))
-                await library.scan()
-            }
+            addMacFolder(at: path)
         }
         #endif
     }
+
+    #if os(macOS)
+    private func addMacFolder(at path: String) {
+        Task {
+            await library.addSource(URL(fileURLWithPath: path))
+            await library.scan()
+        }
+    }
+
+    /// The Music app keeps its DRM-free local files under `Media.localized`.
+    /// Starting the open panel there saves the user a trip through `~/Music` —
+    /// and, more importantly, picking a folder through NSOpenPanel is what
+    /// grants the TCC permission macOS requires before anything can read
+    /// `~/Music`. Reading a hard-coded path instead would prompt (or be denied).
+    private var musicAppMediaDirectory: String {
+        let home = NSHomeDirectory()
+        let fm = FileManager.default
+        for suffix in ["/Music/Music/Media.localized", "/Music/Music", "/Music"] {
+            let candidate = home + suffix
+            if fm.fileExists(atPath: candidate) { return candidate }
+        }
+        return home
+    }
+
+    private func addMusicAppFolder() {
+        Platform.chooseFolder(startingAt: musicAppMediaDirectory) { path in
+            addMacFolder(at: path)
+        }
+    }
+    #endif
 
     #if os(iOS)
     /// A folder is only worth adding if it can produce something to play, and
@@ -242,10 +271,64 @@ struct SettingsView: View {
                             }
                         }
 
+                        #if os(iOS)
+                        VStack(alignment: .leading, spacing: 7) {
+                            Toggle(isOn: Binding(
+                                get: { mediaLibrary.isEnabled },
+                                set: { on in
+                                    Task {
+                                        // A song we are about to lose access to
+                                        // must not keep playing from a stale URL.
+                                        if !on, player.current?.isMediaLibraryItem == true {
+                                            player.stop()
+                                        }
+                                        await mediaLibrary.setEnabled(on)
+                                        await library.scan()
+                                    }
+                                })) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(L("Apple Music library"))
+                                        .font(.body(13, .medium))
+                                        .foregroundStyle(p.onSurface)
+                                    Text(L("Play songs already in the Music app"))
+                                        .font(.body(11))
+                                        .foregroundStyle(p.onSurfaceVariant)
+                                }
+                            }
+                            .tint(p.primary)
+
+                            Text(L("Only DRM-free songs you imported or synced can be played. Apple Music subscription downloads are protected, so they are skipped. Aria never copies the audio files."))
+                                .font(.body(11))
+                                .foregroundStyle(p.onSurfaceVariant)
+                                .fixedSize(horizontal: false, vertical: true)
+
+                            if mediaLibrary.authorization == .denied
+                                || mediaLibrary.authorization == .restricted {
+                                Text(L("Media access denied. Enable Music in iOS Settings to use this."))
+                                    .font(.body(11))
+                                    .foregroundStyle(p.primary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            } else if mediaLibrary.isEnabled {
+                                Text(String(format: L("%d playable · %d protected skipped"),
+                                            mediaLibrary.tracks.count,
+                                            mediaLibrary.skippedCount))
+                                    .font(.body(11))
+                                    .foregroundStyle(p.onSurfaceVariant)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                        #endif
+
                         HStack(spacing: 10) {
                             Button(L("Add folder…")) { addFolder() }
                                 .buttonStyle(PillButtonStyle(kind: .tonal, palette: p))
                                 .disabled(library.isScanning)
+
+                            #if os(macOS)
+                            Button(L("Music app media…")) { addMusicAppFolder() }
+                                .buttonStyle(PillButtonStyle(kind: .tonal, palette: p))
+                                .disabled(library.isScanning)
+                            #endif
 
                             if library.isScanning {
                                 HStack(spacing: 6) {
@@ -258,7 +341,14 @@ struct SettingsView: View {
                             }
                         }
 
-                        // Which build is on the phone: the file name and the
+                        #if os(macOS)
+                        Text(L("Opens the Music app's media folder. Pick the Music subfolder for songs you imported or purchased; Apple Music subscription downloads are DRM-protected and will be skipped."))
+                            .font(.body(10.5))
+                            .foregroundStyle(p.onSurfaceVariant)
+                            .fixedSize(horizontal: false, vertical: true)
+                        #endif
+
+                        // Which build is on this device: the file name and the
                         // bundle version are stamped from the same number.
                         Text(footer)
                             .font(.body(10.5))
@@ -850,6 +940,10 @@ struct HueBar: View {
     @Binding var hue: Double
     let palette: M3Palette
 
+    private func value(at x: CGFloat, width: CGFloat) -> Double {
+        Double(min(max(x / max(width, 1), 0), 1))
+    }
+
     var body: some View {
         GeometryReader { geo in
             let width = geo.size.width
@@ -870,10 +964,49 @@ struct HueBar: View {
             }
             .frame(height: geo.size.height)
             .contentShape(Rectangle())
+#if os(iOS)
+            // The old gesture was exclusive and started on touch-down
+            // (`minimumDistance: 0`), so a thumb resting here while the page
+            // was scrolled both fought the scroll *and* re-coloured the app to
+            // whatever x it happened to land on.
+            //
+            // Two changes, both deliberate:
+            //  • `simultaneousGesture` instead of `gesture`. An exclusive drag
+            //    makes the scroll view wait for it to fail, so simply requiring
+            //    a longer drag produces a dead patch where the page neither
+            //    scrolls nor changes colour. Parallel recognition keeps the
+            //    page's pan gesture alive.
+            //  • A direction lock. The volume slider feels safe because only a
+            //    deliberate horizontal intent changes its value; the same rule
+            //    here leaves every vertical swipe to the page. `dy < 20` also
+            //    stops a drag that starts sideways and then turns into a scroll
+            //    from leaving a stray colour behind. It is stateless on purpose:
+            //    a latched "this is a scroll" flag can survive a cancelled
+            //    gesture and swallow the next real drag.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 8)
+                    .onChanged { drag in
+                        let dx = abs(drag.translation.width)
+                        let dy = abs(drag.translation.height)
+                        guard dx > 12, dx > dy * 1.5, dy < 20 else { return }
+                        hue = value(at: drag.location.x, width: width)
+                    }
+            )
+            // A plain tap still jumps the handle to that colour, so picking a
+            // hue never requires a drag — the same way a tap on the volume
+            // slider's track sets its value while a swipe through it does not.
+            .simultaneousGesture(
+                SpatialTapGesture()
+                    .onEnded { tap in hue = value(at: tap.location.x, width: width) }
+            )
+#else
+            // macOS: a mouse press is always intentional and there is no pan
+            // gesture to steal, so keep the original press-and-track behaviour.
             .gesture(
                 DragGesture(minimumDistance: 0)
-                    .onChanged { hue = min(max($0.location.x / width, 0), 1) }
+                    .onChanged { drag in hue = value(at: drag.location.x, width: width) }
             )
+#endif
         }
     }
 }

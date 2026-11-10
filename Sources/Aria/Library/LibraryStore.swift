@@ -78,7 +78,7 @@ final class LibraryStore: ObservableObject {
     init() {
         sources = Self.loadSources()
         lastScan = UserDefaults.standard.object(forKey: Self.lastScanKey) as? Date
-        tracks = Self.loadCache()
+        tracks = Self.loadCache().filter { !$0.isMediaLibraryItem }
         // Take the scopes before anything tries to read artwork or audio.
         for source in sources { retainScope(Self.resolve(source), for: source.id) }
     }
@@ -308,11 +308,19 @@ final class LibraryStore: ObservableObject {
             PickerLog.shared.note("no permission for \(path)")
         }
         #endif
-        let found = Self.deduplicate(await Self.parseHeaders(of: urls))
+        let parsed = Self.deduplicate(await Self.parseHeaders(of: urls))
+        #if os(iOS)
+        // Music app songs are re-queried on each scan (their URLs are not
+        // stable across launches), but never written into the file cache.
+        MediaLibraryAccess.shared.refresh()
+        let combined = parsed + MediaLibraryAccess.shared.tracks
+        #else
+        let combined = parsed
+        #endif
         // Preserve the original dateAdded for files already known, so a rescan
         // doesn't reshuffle "Recently Added".
         let known = Dictionary(uniqueKeysWithValues: tracks.map { ($0.id, $0.dateAdded) })
-        tracks = found.map { track in
+        tracks = combined.map { track in
             var t = track
             if let existing = known[t.id] { t.dateAdded = existing }
             return t
@@ -320,7 +328,7 @@ final class LibraryStore: ObservableObject {
         isScanning = false
         lastScan = Date()
         UserDefaults.standard.set(lastScan, forKey: Self.lastScanKey)
-        Self.saveCache(tracks)
+        Self.saveCache(parsed)
     }
 
     /// Walks the tree collecting every playable file, and says why when it can't.

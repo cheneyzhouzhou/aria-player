@@ -102,6 +102,17 @@ enum L10n {
         "Music folders": "音乐文件夹",
         "Add folder…": "添加文件夹…",
         "Scanning…": "正在扫描…",
+        "Music app media…": "音乐 App 媒体目录…",
+        "Opens the Music app's media folder. Pick the Music subfolder for songs you imported or purchased; Apple Music subscription downloads are DRM-protected and will be skipped.": "将打开「音乐」App 的媒体文件夹。选择其中的 Music 子文件夹，即可播放你导入或购买的歌曲；Apple Music 订阅下载的曲目受版权保护，会被跳过。",
+        "Apple Music library": "Apple Music 音乐库",
+        "Play songs already in the Music app": "播放「音乐」App 中已有的歌曲",
+        "Only DRM-free songs you imported or synced can be played. Apple Music subscription downloads are protected, so they are skipped. Aria never copies the audio files.": "仅可播放你自行导入或同步、且无版权保护的歌曲。Apple Music 订阅下载的曲目受保护，会被跳过。Aria 不会复制任何音频文件。",
+        "Media access denied. Enable Music in iOS Settings to use this.": "媒体库访问被拒绝。请在 iOS 设置中允许访问「音乐」后重试。",
+        "%d playable · %d protected skipped": "%d 首可播放 · %d 首受保护已跳过",
+        "Music app": "音乐 App",
+        "Unknown title": "未知曲目",
+        "Unknown artist": "未知艺人",
+        "Unknown album": "未知专辑",
 
         // Settings — output
         "Output": "输出",

@@ -376,12 +376,17 @@ struct QueueList: View {
                     shape: AnyShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous)),
                     radius: Radius.card, popup: true)
             case .fullBleedGlass:
-                GlassSurface(shape: Rectangle(), tint: palette.surfaceContainer,
-                             border: palette.outline, radius: 0,
-                             showBorder: false, popup: true)
-                    // Reach under the home indicator so no bare strip shows
-                    // below the glass (and therefore no rows spill into it).
-                    .ignoresSafeArea(edges: .bottom)
+                if AppearanceSettings.shared.usesGlass {
+                    GlassSurface(shape: Rectangle(), tint: palette.surfaceContainer,
+                                 border: palette.outline, radius: 0,
+                                 popup: true)
+                        // Reach under the home indicator so no bare strip shows
+                        // below the glass (and therefore no rows spill into it).
+                        .ignoresSafeArea(edges: .bottom)
+                } else {
+                    popupPanelFill(palette)
+                        .ignoresSafeArea(edges: .bottom)
+                }
             }
         }
     }

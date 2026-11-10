@@ -235,9 +235,27 @@ struct CoverArt: View {
     }
 
     private func load() {
-        image = ArtworkCache.shared.cached(for: cacheKey)
-        guard image == nil, let track else { return }
+        guard let track else { image = nil; return }
+        if let hit = ArtworkCache.shared.cached(for: cacheKey) {
+            image = hit
+            return
+        }
+        #if os(iOS)
+        // Music app items have no file to read art bytes from; the artwork is
+        // decoded lazily from the media item and cached under the album key.
+        if let mediaArt = MediaLibraryAccess.shared.artwork(for: cacheKey) {
+            ArtworkCache.shared.store(mediaArt, for: cacheKey)
+            image = mediaArt
+            return
+        }
+        #endif
+        // Nothing cached yet. Keep whatever is on screen while the new art
+        // decodes: clearing it here is what made the floating bar "light up"
+        // on every track change — the tinted placeholder is far brighter than
+        // most sleeves and only showed for a couple of frames.
+        guard track.hasArtwork else { image = nil; return }
         ArtworkCache.shared.artwork(for: track, key: cacheKey) { loaded in
+            guard let loaded else { return }
             withAnimation(.easeOut(duration: 0.2)) { image = loaded }
         }
     }

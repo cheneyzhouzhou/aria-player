@@ -35,6 +35,9 @@ final class AudioPlayer: ObservableObject {
     @Published var volume: Float = 1.0 {
         didSet {
             engine.mainMixerNode.outputVolume = Self.gain(for: volume)
+            #if os(iOS)
+            systemPlayer?.volume = Self.gain(for: volume)
+            #endif
             UserDefaults.standard.set(volume, forKey: "volume")
             UserDefaults.standard.set(Int(Self.decibels(for: volume).rounded()), forKey: "volumeDB")
         }
@@ -60,6 +63,14 @@ final class AudioPlayer: ObservableObject {
     private let eq = AVAudioUnitEQ(numberOfBands: Equalizer.bandCount)
     private var file: AVAudioFile?
     private var connectedFormat: AVAudioFormat?
+    #if os(iOS)
+    /// Songs from the Music app have `ipod-library://` URLs, which AVAudioFile
+    /// cannot open. They get a separate AVPlayer; the AVAudioEngine chain (and
+    /// therefore EQ / output pinning) stays exactly as it is for real files.
+    private var systemPlayer: AVPlayer?
+    private var systemTimeObserver: Any?
+    private var systemEndToken: NSObjectProtocol?
+    #endif
 
     /// Frame the current scheduled segment started at — the player node's own
     /// clock resets on every stop/schedule, so seeking is tracked separately.
@@ -67,7 +78,23 @@ final class AudioPlayer: ObservableObject {
     /// Bumped on every schedule so a stale completion callback can't advance us.
     private var generation = 0
     private var isSeeking = false
+    /// How many files in a row failed to open. `next` re-enters `load`, so a
+    /// queue where nothing is readable would otherwise walk the order forever
+    /// (or until the stack ran out).
+    private var loadFailStreak = 0
     private var ticker: Timer?
+
+    #if os(iOS)
+    /// A pending "did playback really start?" check — see `armWatchdog`.
+    private var watchdog: Task<Void, Never>?
+    /// Debounces the configuration-change notification; one rate switch can
+    /// post several in a row.
+    private var rearmWork: DispatchWorkItem?
+    /// How many times the graph has been rebuilt for one track. Bounded so a
+    /// device that keeps collapsing it ends in an honest paused state instead
+    /// of an endless repair loop.
+    private var rearmCount = 0
+    #endif
 
     /// Playback order into `queue`: identity normally, a permutation when shuffled.
     private var order: [Int] = []
@@ -257,6 +284,18 @@ final class AudioPlayer: ObservableObject {
         ) { [weak self] note in
             Task { @MainActor in self?.handleRouteChange(note) }
         }
+        // Asking the hardware for a new sample rate is itself a configuration
+        // change, and it lands asynchronously — often a beat *after* `load` has
+        // already started the engine and the node. The engine stops itself on
+        // that change, so without this observer tapping shuffle a few times
+        // could leave a track "playing" with no sound and a clock stuck at
+        // 0:00. The desktop build has repaired this through
+        // `engineConfigurationChanged` all along; iOS had no equivalent.
+        NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.engineReconfigured() }
+        }
         #endif
     }
 
@@ -333,16 +372,43 @@ final class AudioPlayer: ObservableObject {
     // MARK: - Transport
 
     private func load(_ track: Track, autoplay: Bool) {
-        node.stop()
-        generation += 1
-
-        guard let audioFile = try? AVAudioFile(forReading: track.url) else {
-            // A file that vanished or won't decode shouldn't wedge the queue.
-            current = track
-            duration = 0
-            if queue.count > 1 { next(userInitiated: false) }
+        #if os(iOS)
+        if track.isMediaLibraryItem {
+            loadMediaItem(track, autoplay: autoplay)
             return
         }
+        // Switching back to a real file: retire the AVPlayer first.
+        if systemPlayer != nil { teardownSystemPlayer() }
+        #endif
+        node.stop()
+        generation += 1
+        #if os(iOS)
+        // A fresh track gets a fresh repair budget and a liveness check.
+        rearmCount = 0
+        watchdog?.cancel()
+        #endif
+
+        // `length == 0` would open fine and then schedule nothing: the node
+        // would "play" silence, so treat it as unreadable instead.
+        guard let audioFile = try? AVAudioFile(forReading: track.url),
+              audioFile.length > 0 else {
+            // A file that vanished or won't decode shouldn't wedge the queue.
+            // Stay honest about the transport state too: leaving `isPlaying`
+            // true here is what showed a playing-looking progress bar that
+            // never moved.
+            current = track
+            duration = 0
+            isPlaying = false
+            loadFailStreak += 1
+            if queue.count > 1, loadFailStreak < queue.count {
+                next(userInitiated: false)
+            } else {
+                loadFailStreak = 0
+                stop()
+            }
+            return
+        }
+        loadFailStreak = 0
 
         file = audioFile
         current = track
@@ -359,15 +425,91 @@ final class AudioPlayer: ObservableObject {
         schedule(from: 0)
 
         if autoplay {
+            // `prepareEngine` can legitimately fail to get the engine running —
+            // the session was taken, the route died. Claiming playback anyway is
+            // what showed a "playing" track whose progress never moved.
+            guard engine.isRunning else {
+                isPlaying = false
+                nowPlaying?.update(for: self)
+                return
+            }
             node.play()
             isPlaying = true
             #if os(macOS)
             configRepairCount = 0
             logOutput("load-play")
+            #else
+            armWatchdog()
             #endif
         }
         nowPlaying?.update(for: self)
     }
+
+    #if os(iOS)
+    /// Plays a Music app song straight from its `ipod-library://` URL. No file
+    /// is exported or copied. AVPlayer owns its own rendering, so the engine
+    /// is stopped and the EQ / device-pinning chain is bypassed for these.
+    private func loadMediaItem(_ track: Track, autoplay: Bool) {
+        teardownSystemPlayer()
+        node.stop()
+        engine.stop()
+        file = nil
+        generation += 1
+        loadFailStreak = 0
+        rearmCount = 0
+        watchdog?.cancel()
+
+        let item = AVPlayerItem(url: track.url)
+        let player = AVPlayer(playerItem: item)
+        player.volume = Self.gain(for: volume)
+        systemPlayer = player
+
+        current = track
+        let assetSeconds = CMTimeGetSeconds(item.asset.duration)
+        duration = track.duration > 0
+            ? track.duration
+            : (assetSeconds.isFinite && assetSeconds > 0 ? assetSeconds : 0)
+        currentTime = 0
+        seekFrame = 0
+        isSeeking = false
+
+        systemTimeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.15, preferredTimescale: 600),
+            queue: .main) { [weak self] time in
+                Task { @MainActor in
+                    guard let self, self.systemPlayer === player, !self.isSeeking else { return }
+                    let seconds = CMTimeGetSeconds(time)
+                    if seconds.isFinite { self.currentTime = min(seconds, self.duration) }
+                }
+            }
+        systemEndToken = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.systemPlayer === player else { return }
+                self.next(userInitiated: false)
+            }
+        }
+
+        if autoplay {
+            try? AVAudioSession.sharedInstance().setActive(true)
+            player.play()
+            isPlaying = true
+        } else {
+            isPlaying = false
+        }
+        nowPlaying?.update(for: self)
+    }
+
+    private func teardownSystemPlayer() {
+        if let observer = systemTimeObserver { systemPlayer?.removeTimeObserver(observer) }
+        if let token = systemEndToken { NotificationCenter.default.removeObserver(token) }
+        systemTimeObserver = nil
+        systemEndToken = nil
+        systemPlayer?.pause()
+        systemPlayer = nil
+    }
+    #endif
 
     /// Sample rates differ between albums, so the mixer connection is rebuilt
     /// whenever the incoming file's format changes.
@@ -378,7 +520,18 @@ final class AudioPlayer: ObservableObject {
         // avoids that conversion entirely. Bluetooth ignores the request and
         // picks its own rate, which is expected.
         let session = AVAudioSession.sharedInstance()
+        // Re-activate before starting the engine. `load` reaches here straight
+        // from a shuffle tap, without going through `resume`, so it never
+        // re-activated the session the system had deactivated — the engine then
+        // started against a dead session: silence, while `isPlaying` said
+        // otherwise.
+        try? session.setActive(true)
         if abs(session.sampleRate - format.sampleRate) > 1 {
+            // A rate switch tears the graph down. Take the engine down first so
+            // it happens on a stopped engine rather than on one that is already
+            // rendering — starting and then being invalidated is what produced
+            // a silent track that still called itself playing.
+            if engine.isRunning { engine.stop() }
             try? session.setPreferredSampleRate(format.sampleRate)
         }
         #endif
@@ -479,6 +632,15 @@ final class AudioPlayer: ObservableObject {
     func resume() {
         guard current != nil else { return }
         #if os(iOS)
+        if let systemPlayer {
+            try? AVAudioSession.sharedInstance().setActive(true)
+            systemPlayer.play()
+            isPlaying = true
+            nowPlaying?.update(for: self)
+            return
+        }
+        #endif
+        #if os(iOS)
         // The system deactivates the session during an interruption and on
         // some route changes. Without reactivating it the engine starts but
         // the phone stays silent — and the lock screen, which follows the
@@ -497,15 +659,33 @@ final class AudioPlayer: ObservableObject {
             try? engine.start()
             #endif
         }
+        guard engine.isRunning else {
+            // The engine refused to start. Saying "playing" regardless is how a
+            // silent track ended up with a lit-up play state and a progress bar
+            // frozen at 0:00.
+            isPlaying = false
+            nowPlaying?.update(for: self)
+            return
+        }
         node.play()
         isPlaying = true
         #if os(macOS)
         logOutput("resume")
+        #else
+        armWatchdog()
         #endif
         nowPlaying?.update(for: self)
     }
 
     func pause() {
+        #if os(iOS)
+        if let systemPlayer {
+            systemPlayer.pause()
+            isPlaying = false
+            nowPlaying?.update(for: self)
+            return
+        }
+        #endif
         node.pause()
         isPlaying = false
         #if os(iOS)
@@ -521,6 +701,17 @@ final class AudioPlayer: ObservableObject {
     }
 
     func stop() {
+        #if os(iOS)
+        if systemPlayer != nil {
+            teardownSystemPlayer()
+            file = nil
+            isPlaying = false
+            currentTime = 0
+            seekFrame = 0
+            nowPlaying?.update(for: self)
+            return
+        }
+        #endif
         node.stop()
         isPlaying = false
         currentTime = 0
@@ -534,6 +725,22 @@ final class AudioPlayer: ObservableObject {
     }
 
     func seek(to seconds: Double) {
+        #if os(iOS)
+        if let systemPlayer {
+            let target = max(0, min(seconds, duration))
+            isSeeking = true
+            currentTime = target
+            systemPlayer.seek(to: CMTime(seconds: target, preferredTimescale: 600)) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.currentTime = target
+                    self.isSeeking = false
+                }
+            }
+            nowPlaying?.update(for: self)
+            return
+        }
+        #endif
         guard let file else { return }
         let rate = file.processingFormat.sampleRate
         let target = AVAudioFramePosition(max(0, min(seconds, duration)) * rate)
@@ -634,6 +841,56 @@ final class AudioPlayer: ObservableObject {
         schedule(from: frame)
         isSeeking = false
         node.play()
+    }
+
+    /// A configuration change is usually our own sample-rate request landing, or
+    /// headphones coming and going. One rate switch posts several of these, so
+    /// let the graph settle first, then put it back if it went quiet.
+    private func engineReconfigured() {
+        guard file != nil else { return }
+        rearmWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            Task { @MainActor in self?.rearmIfSilent(force: false) }
+        }
+        rearmWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    /// `force` is the watchdog's way in: a node can report `isPlaying` while its
+    /// timeline never advances, so the cheap liveness test would wave it
+    /// through. Everything else can trust that test.
+    private func rearmIfSilent(force: Bool) {
+        guard file != nil, isPlaying else { return }
+        if !force, engine.isRunning, node.isPlaying { return }
+
+        rearmWork = nil
+        rearmCount += 1
+        guard rearmCount <= 3 else {
+            // Three rebuilds and still nothing: stop claiming it plays.
+            watchdog?.cancel()
+            node.stop()
+            isPlaying = false
+            nowPlaying?.update(for: self)
+            return
+        }
+        rearmAfterRouteChange()
+        armWatchdog()
+    }
+
+    /// `load` can call `play()` in the same turn the hardware is switching rate.
+    /// The node then reports playing with a clock that never moves — "it says
+    /// playing but the progress bar is stuck". This notices that and rebuilds
+    /// once instead of leaving the lie on screen.
+    private func armWatchdog() {
+        watchdog?.cancel()
+        let startedAt = currentTime
+        watchdog = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard let self, !Task.isCancelled, self.isPlaying else { return }
+            // Frames only advance while the graph is really rendering.
+            guard abs(self.currentTime - startedAt) < 0.05 else { return }
+            self.rearmIfSilent(force: true)
+        }
     }
 
     /// What the audio is actually leaving through, and at what rate.

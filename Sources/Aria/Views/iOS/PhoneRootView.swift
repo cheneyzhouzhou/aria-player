@@ -14,8 +14,13 @@ struct PhoneRootView: View {
     @ObservedObject private var appearance = AppearanceSettings.shared
     @State private var destination: RailDestination = .library
     @State private var tab: LibraryTab = .albums
+    /// One string for both fields, exactly as on the desktop: the library
+    /// header and the Search tab show the same text, so the page that is
+    /// filtered always displays — and can clear — the term doing it.
     @State private var search = ""
     @State private var showNowPlaying = false
+    /// Last resolved colour for the mini player — see `refreshNowPlayingSeed`.
+    @State private var nowPlayingSeed: PaletteSeed?
     /// How far the page has been dragged sideways. It exists so the content
     /// follows the finger: without it a swipe that ends one point short of the
     /// threshold looks like a dead gesture.
@@ -36,11 +41,26 @@ struct PhoneRootView: View {
     }
 
     private var nowPlayingPalette: M3Palette {
-        guard let track = player.current,
-              let seed = palettes.seed(for: track.albumKey, artwork: track) else {
-            return M3Palette(seed: palettes.librarySeed, isDark: scheme == .dark, vivid: true)
+        M3Palette(seed: nowPlayingSeed ?? palettes.librarySeed,
+                  isDark: scheme == .dark, vivid: true)
+    }
+
+    /// Seeds resolve off the main thread, so asking for one on the first visit
+    /// to an album returns nothing for a moment. Painting the library colour
+    /// during that gap is what made the floating bar flash on every track
+    /// change — the buttons and (in the solid theme) the whole capsule jumped
+    /// to an unrelated hue and then jumped back. Hold whatever is already on
+    /// screen instead; the palette is animated, so the real colour arrives as
+    /// a short crossfade.
+    private func refreshNowPlayingSeed() {
+        guard let track = player.current else { return }
+        if let seed = palettes.seed(for: track.albumKey, artwork: track) {
+            nowPlayingSeed = seed
+        } else if !track.hasArtwork {
+            // Nothing to extract here, so use the library colour on purpose
+            // rather than holding the previous album's tint forever.
+            nowPlayingSeed = palettes.librarySeed
         }
-        return M3Palette(seed: seed, isDark: scheme == .dark, vivid: true)
     }
 
     var body: some View {
@@ -61,6 +81,11 @@ struct PhoneRootView: View {
                                             style: .continuous))
                 .padding(.horizontal, AppearanceSettings.shared.usesGlass ? 10 : 0)
                 .padding(.top, AppearanceSettings.shared.usesGlass ? 6 : 0)
+                // The page runs all the way down and the floating bars sit on
+                // top of it. Glass reads as glass because of what passes
+                // *behind* it — covers and rows scrolling under the bars are
+                // what the frost picks up, so shortening the page to make room
+                // for them actually flattened the effect.
                 // Swipe back from anywhere on the page, the same idea as the
                 // player's pull-to-dismiss. This used to be an 18pt strip on
                 // the left edge, which a normal swipe mostly missed.
@@ -75,6 +100,10 @@ struct PhoneRootView: View {
                     PhoneMiniPlayer(palette: AppearanceSettings.shared.usesMorandi ? active : nowPlayingPalette) {
                         showNowPlaying = true
                     }
+                    // Crossfade the tint instead of snapping to it: a palette
+                    // swap lands as a colour jump otherwise, which reads as the
+                    // bar flashing.
+                    .animation(.easeInOut(duration: 0.30), value: nowPlayingSeed)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
                 PhoneNavBar(destination: $destination, palette: active)
@@ -85,6 +114,8 @@ struct PhoneRootView: View {
         .environment(\.palette, active)
         .animation(.easeInOut(duration: 0.45), value: active)
         .animation(.spring(response: 0.4, dampingFraction: 0.9), value: player.current)
+        .onChange(of: player.current?.albumKey, initial: true) { _, _ in refreshNowPlayingSeed() }
+        .onChange(of: palettes.revision) { _, _ in refreshNowPlayingSeed() }
         .onChange(of: destination) { _, _ in nav.reset() }
         .onChange(of: tab) { _, _ in nav.reset() }
         .fullScreenCover(isPresented: $showNowPlaying) {
@@ -153,17 +184,27 @@ struct PhoneRootView: View {
 
     private var libraryScreen: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(L("Library"))
-                .font(.display(34, .semibold))
-                .foregroundStyle(active.onSurface)
-                // In the glass theme the page sits inside the floating panel, and
-                // without this the title's cap-height lands ~14pt from the
-                // panel's top edge — visibly tighter than the Search and
-                // Settings pages, which both use 40pt. Only the glass theme
-                // needs it; Solid and Morandi are unchanged.
-                .padding(.top, AppearanceSettings.shared.usesGlass ? 22 : 0)
-                .padding(.horizontal, 22)
-                .padding(.bottom, 14)
+            // The library now carries its own small search field, the way the
+            // desktop layout does. It shares one string with the Search tab, so
+            // whatever is filtering this page is visible here and can be
+            // cleared here — before, the term lived only on the other tab and
+            // the library just looked like it had lost music.
+            HStack(alignment: .center, spacing: 12) {
+                Text(L("Library"))
+                    .font(.display(34, .semibold))
+                    .foregroundStyle(active.onSurface)
+                Spacer(minLength: 8)
+                SearchPill(text: $search, palette: active,
+                           prompt: L("Search"), width: 148)
+            }
+            // In the glass theme the page sits inside the floating panel, and
+            // without this the title's cap-height lands ~14pt from the
+            // panel's top edge — visibly tighter than the Search and
+            // Settings pages, which both use 40pt. Only the glass theme
+            // needs it; Solid and Morandi are unchanged.
+            .padding(.top, AppearanceSettings.shared.usesGlass ? 22 : 0)
+            .padding(.horizontal, 22)
+            .padding(.bottom, 14)
 
             // A swipe can land on a chip that is scrolled off the edge, so the
             // row follows the selection rather than staying where it was.
@@ -304,6 +345,7 @@ struct PhoneRootView: View {
         return library.albums.filter { album in
             album.title.lowercased().contains(query)
                 || album.artist.lowercased().contains(query)
+                || album.tracks.contains { $0.title.lowercased().contains(query) }
         }
     }
 
@@ -347,9 +389,12 @@ struct PhoneNavBar: View {
         }
         .padding(.vertical, 10)
         .background {
+            // Same material *and* same outline family as the floating player
+            // pill: a capsule. At radius 30 the bar read as a solid slab,
+            // while the pill beside it reads as glass — the difference was
+            // the silhouette, not the frost.
             SurfaceRole.panel.background(palette,
-                shape: AnyShape(RoundedRectangle(cornerRadius: 30, style: .continuous)),
-                radius: 30, strong: true)
+                shape: AnyShape(Capsule()), radius: 999, strong: true)
         }
     }
 }
@@ -366,7 +411,11 @@ struct PhoneMiniPlayer: View {
         HStack(spacing: 11) {
             if let track = player.current {
                 CoverArt(track: track, cacheKey: track.albumKey,
-                         radius: Radius.thumb, palette: palette)
+                         radius: Radius.thumb, palette: palette,
+                         // Same rule as the full player: a track with no sleeve
+                         // of its own gets the bundled default cover rather
+                         // than the bright placeholder tile.
+                         fallback: track.hasArtwork ? nil : DefaultCover.image)
                     .frame(width: 42, height: 42)
 
                 VStack(alignment: .leading, spacing: 1) {
@@ -374,10 +423,15 @@ struct PhoneMiniPlayer: View {
                         .font(.body(13, .semibold))
                         .foregroundStyle(palette.onSurface)
                         .lineLimit(1)
+                        // The page animates on `player.current`, which makes a
+                        // changed string crossfade — two titles on top of each
+                        // other for a beat. Swap it instead.
+                        .contentTransition(.identity)
                     Text(track.artist)
                         .font(.body(11))
                         .foregroundStyle(palette.onSurfaceVariant)
                         .lineLimit(1)
+                        .contentTransition(.identity)
                 }
 
                 Spacer(minLength: 8)
@@ -598,14 +652,14 @@ struct PhoneNowPlayingView: View {
             }
             .padding(.bottom, 16)
 
-            // Dim the player while a popup is open. The popups offer both a
-            // half-height and a full-height detent; without this, the gap under
-            // a half-height card would show a bright band of the cover.
+            // Popups live in this ZStack, exactly like the floating player
+            // bar: a system sheet's presenting view is isolated by UIKit, so a
+            // blur inside the sheet sees only a flat backdrop and none of the
+            // artwork behind it. In the same hierarchy the frost really has
+            // the cover to reveal.
             if showQueue || showEQ || showAudioChain {
-                Color.black.opacity(0.38)
-                    .ignoresSafeArea()
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
+                popupLayer
+                    .zIndex(5)
             }
         }
         .onAppear { backdrop.load(for: player.current) }
@@ -625,12 +679,17 @@ struct PhoneNowPlayingView: View {
         .gesture(
             DragGesture(minimumDistance: 24)
                 .onChanged { value in
+                    guard !showQueue, !showEQ, !showAudioChain else { return }
                     let height = value.translation.height
                     let width = value.translation.width
                     guard height > 0, height > abs(width) * 1.2 else { return }
                     dismissDrag = height
                 }
                 .onEnded { value in
+                    guard !showQueue, !showEQ, !showAudioChain else {
+                        dismissDrag = 0
+                        return
+                    }
                     let height = value.translation.height
                     let predicted = value.predictedEndTranslation.height
                     if height > 140 || predicted > 240 {
@@ -643,36 +702,91 @@ struct PhoneNowPlayingView: View {
                     }
                 }
         )
-        .sheet(isPresented: $showQueue) {
-            // The queue draws its own full-bleed frost inside the sheet: it
-            // fills the sheet (no rows spilling below a shorter panel) and keeps
-            // the same frosted glass as the other player popups.
+    }
+
+    /// Vertical offset while a popup is being pulled down to dismiss it.
+    /// The gesture lives only on a top grabber, so the lists and faders below
+    /// keep their own scrolling.
+    @State private var popupDrag: CGFloat = 0
+
+    private func closePopup() {
+        popupDrag = 0
+        showQueue = false
+        showEQ = false
+        showAudioChain = false
+    }
+
+    @ViewBuilder
+    private var popupCard: some View {
+        if showEQ {
+            EqualizerView(palette: playerOverlayPalette(palette)) { closePopup() }
+                .environmentObject(player)
+        } else if showQueue {
             QueueList(palette: playerOverlayPalette(palette), background: .fullBleedGlass)
                 .environmentObject(player)
-                .environment(\.colorScheme, .dark)
-                // Reach under the home indicator so the glass fills the whole
-                // sheet; otherwise a bare light strip shows at the bottom.
-                .ignoresSafeArea(edges: .bottom)
-                // Half or full height. The player is dimmed underneath, so the
-                // half-height card doesn't sit over a bright band.
-                .presentationDetents([.medium, .large])
-                .presentationBackground(.clear)
-        }
-        .sheet(isPresented: $showEQ) {
-            EqualizerView(palette: playerOverlayPalette(palette)) { showEQ = false }
+        } else if showAudioChain {
+            AudioChainView(palette: playerOverlayPalette(palette)) { closePopup() }
                 .environmentObject(player)
-                .ignoresSafeArea(edges: .bottom)
-                .presentationDetents([.medium, .large])
-                .presentationBackground(.clear)
         }
-        .sheet(isPresented: $showAudioChain) {
-            AudioChainView(palette: playerOverlayPalette(palette)) { showAudioChain = false }
-                .environmentObject(player)
-                .ignoresSafeArea(edges: .bottom)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-                .presentationBackground(.clear)
+    }
+
+    /// An in-window floating card. Each content view paints its own
+    /// `SurfaceRole.panel` / `strong` glass, so this layer only supplies the
+    /// scrim, the rounded silhouette, the shadow and the tap-to-dismiss.
+    private var popupLayer: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .bottom) {
+                Color.black.opacity(0.12)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { closePopup() }
+
+                popupCard
+                    .frame(maxWidth: .infinity)
+                    .frame(height: min(geo.size.height * 0.74, 640))
+                    .overlay(alignment: .top) { popupDragHandle }
+                    .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                    .shadow(color: .black.opacity(0.38), radius: 30, y: 14)
+                    .offset(y: max(0, popupDrag))
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 10)
+            }
+            .ignoresSafeArea(edges: .bottom)
         }
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    /// The sheet-like grabber. Only this strip owns the dismiss drag. It is
+    /// deliberately wide (300pt) so a thumb landing off-centre still catches
+    /// it, while leaving the outer ~40pt clear for the close button / toggle.
+    private var popupDragHandle: some View {
+        HStack {
+            Spacer(minLength: 0)
+            Capsule()
+                .fill(Color.primary.opacity(0.28))
+                .frame(width: 46, height: 5)
+            Spacer(minLength: 0)
+        }
+        .frame(width: 300, height: 32)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 8)
+                .onChanged { value in
+                    guard value.translation.height > 0 else { return }
+                    popupDrag = value.translation.height
+                }
+                .onEnded { value in
+                    let height = value.translation.height
+                    let predicted = value.predictedEndTranslation.height
+                    if height > 120 || predicted > 220 {
+                        closePopup()
+                    } else {
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                            popupDrag = 0
+                        }
+                    }
+                }
+        )
     }
 
     private var header: some View {

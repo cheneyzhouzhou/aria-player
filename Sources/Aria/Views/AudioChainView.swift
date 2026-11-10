@@ -30,15 +30,29 @@ enum ChainQuality {
         }
     }
 
-    var color: Color {
+    /// Muted, appearance-aware status colours. The old fixed bright swatches
+    /// (a near-neon red for a lossy link) read as loud patches on both the dark
+    /// stage and the light panels.
+    func tint(_ palette: M3Palette) -> Color {
+        let saturation = 0.34
+        let brightness = palette.isDark ? 0.78 : 0.46
         switch self {
-        case .idle: return Color(red: 0.58, green: 0.60, blue: 0.64)
-        case .maximum: return Color(red: 0.27, green: 0.78, blue: 0.56)
-        case .shared: return Color(red: 0.52, green: 0.68, blue: 0.88)
-        case .unverified, .processed: return Color(red: 0.99, green: 0.68, blue: 0.29)
-        case .lossyLink: return Color(red: 0.99, green: 0.45, blue: 0.45)
+        case .idle:
+            return Color(hue: 0.60, saturation: 0.06,
+                         brightness: palette.isDark ? 0.66 : 0.44)
+        case .maximum:
+            return Color(hue: 0.40, saturation: saturation, brightness: brightness)
+        case .shared:
+            return Color(hue: 0.58, saturation: saturation, brightness: brightness)
+        case .unverified, .processed:
+            return Color(hue: 0.10, saturation: saturation, brightness: brightness)
+        case .lossyLink:
+            return Color(hue: 0.02, saturation: saturation, brightness: brightness)
         }
     }
+
+    /// Small status dot on the playback stage, which is always dark.
+    var color: Color { tint(.fallback) }
 
     var explanation: String {
         switch self {
@@ -298,7 +312,7 @@ struct AudioChainView: View {
                             ForEach(chain.improvementNotes, id: \.self) { note in
                                 HStack(alignment: .top, spacing: 8) {
                                     Circle()
-                                        .fill(quality.color)
+                                        .fill(quality.tint(palette))
                                         .frame(width: 5, height: 5)
                                         .padding(.top, 5)
                                     Text(note)
@@ -341,14 +355,11 @@ struct AudioChainView: View {
                 // sheet sits on the artwork instead of clashing with it.
                 GlassSurface(shape: Rectangle(), tint: palette.surfaceContainer,
                              border: palette.outline, radius: 0,
-                             showBorder: false, popup: true)
+                             popup: true)
             } else {
-                palette.surface
+                popupPanelFill(palette)
             }
         }
-        // Same reasoning as the equalizer: the sheet is dark with light text, so
-        // its glass cards must render dark regardless of the system appearance.
-        .environment(\.colorScheme, .dark)
     }
 
     private var header: some View {
@@ -372,17 +383,17 @@ struct AudioChainView: View {
             Spacer()
 
             HStack(spacing: 6) {
-                Circle().fill(quality.color).frame(width: 7, height: 7)
+                Circle().fill(quality.tint(palette)).frame(width: 7, height: 7)
                 Text(L(quality.label))
                     .font(.body(11, .bold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
-                    .foregroundStyle(quality.color)
+                    .foregroundStyle(quality.tint(palette))
             }
             .padding(.horizontal, 11)
             .padding(.vertical, 6)
-            .background(Capsule().fill(quality.color.opacity(0.14)))
-            .overlay(Capsule().stroke(quality.color.opacity(0.45), lineWidth: 1))
+            .background(Capsule().fill(quality.tint(palette).opacity(0.14)))
+            .overlay(Capsule().stroke(quality.tint(palette).opacity(0.45), lineWidth: 1))
         }
         .padding(.horizontal, 22)
         .padding(.top, 16)

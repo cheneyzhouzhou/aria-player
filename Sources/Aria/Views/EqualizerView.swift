@@ -30,16 +30,11 @@ struct EqualizerView: View {
                 // rather than a flat colour that fights the artwork backdrop.
                 GlassSurface(shape: Rectangle(), tint: palette.surfaceContainer,
                              border: palette.outline, radius: 0,
-                             showBorder: false, popup: true)
+                             popup: true)
             } else {
-                palette.surface
+                popupPanelFill(palette)
             }
         }
-        // The panel always sits on the dark playback backdrop and uses light
-        // text, so its inner glass cards must be dark too — otherwise a light
-        // system appearance paints them white under light text and the faders
-        // disappear (very noticeable over a pale cover).
-        .environment(\.colorScheme, .dark)
     }
 
     // MARK: Header

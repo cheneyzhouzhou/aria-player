@@ -176,15 +176,29 @@ func themePalette(seed: PaletteSeed, isDark: Bool, vivid: Bool = false) -> M3Pal
 import UIKit
 /// iOS backdrop blur: a `UIVisualEffectView` with a material blur. The corner
 /// radius is applied to the layer so the frosted region itself is rounded.
+/// Player popups use the ultra-thin material: the regular one tints towards
+/// opaque white and hides the artwork they are meant to reveal.
 private struct PlatformBlur: UIViewRepresentable {
     var cornerRadius: CGFloat
+    var thin: Bool = false
+    var dark: Bool = false
+    /// Shared with macOS: player popups fade the blur layer itself to 0.55 so
+    /// both platforms read as the same open, see-through glass.
+    var opacity: CGFloat = 1
+    private var style: UIBlurEffect.Style {
+        if !thin { return .systemMaterial }
+        return dark ? .systemUltraThinMaterialDark : .systemUltraThinMaterialLight
+    }
     func makeUIView(context: Context) -> UIVisualEffectView {
-        let view = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
+        let view = UIVisualEffectView(effect: UIBlurEffect(style: style))
         view.layer.cornerRadius = cornerRadius
         view.clipsToBounds = true
+        view.alpha = opacity
         return view
     }
     func updateUIView(_ uiView: UIVisualEffectView, context: Context) {
+        uiView.effect = UIBlurEffect(style: style)
+        uiView.alpha = opacity
         uiView.layer.cornerRadius = cornerRadius
     }
 }
@@ -194,18 +208,31 @@ import AppKit
 /// within the same window so the gradient field behind each panel shows through.
 private struct PlatformBlur: NSViewRepresentable {
     var cornerRadius: CGFloat
+    var thin: Bool = false
+    var dark: Bool = false
+    /// macOS's light materials are far denser than iOS's ultra-thin ones, so
+    /// popups use `.menu` (a complete blur) plus a shared 0.55 fade of the
+    /// whole effect view — the artwork behind them reads through without the
+    /// backing text punching through sharply.
+    var opacity: CGFloat = 1
+    private var material: NSVisualEffectView.Material {
+        thin ? .menu : .hudWindow
+    }
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
-        view.material = .hudWindow
+        view.material = material
         view.blendingMode = .withinWindow
         view.state = .active
         view.wantsLayer = true
         view.layer?.cornerRadius = cornerRadius
         view.layer?.cornerCurve = .continuous
         view.layer?.masksToBounds = true
+        view.alphaValue = opacity
         return view
     }
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material = material
+        nsView.alphaValue = opacity
         nsView.layer?.cornerRadius = cornerRadius
     }
 }
@@ -214,7 +241,13 @@ private struct PlatformBlur: NSViewRepresentable {
 /// Cross-platform wrapper around the platform blur view.
 struct BlurEffectView: View {
     var cornerRadius: CGFloat = Radius.card
-    var body: some View { PlatformBlur(cornerRadius: cornerRadius) }
+    var thin: Bool = false
+    var dark: Bool = false
+    var opacity: CGFloat = 1
+    var body: some View {
+        PlatformBlur(cornerRadius: cornerRadius, thin: thin,
+                     dark: dark, opacity: opacity)
+    }
 }
 
 // MARK: - Glass surface
@@ -231,8 +264,9 @@ struct GlassSurface<S: Shape>: View {
     /// A denser frost for the big containers that float over the background
     /// (the rail, the page, the mini player, the phone nav bar).
     var strong: Bool = false
-    /// The player's popups: translucent enough to see the artwork, dark enough
-    /// to keep their light text legible.
+    /// The player's popups (EQ, audio chain, queue) use the *same* glass as the
+    /// floating player bar. `popup` is an alias for `strong` so there is no
+    /// second look that can drift away from the bar's material.
     var popup: Bool = false
 
     @Environment(\.colorScheme) private var scheme
@@ -242,10 +276,23 @@ struct GlassSurface<S: Shape>: View {
     /// comes from the aurora behind the panel, not from the fill itself, which
     /// is what makes it read as real glass.
     private var fill: Color {
+        // Popups are now in-window cards with the real artwork behind them,
+        // so they can carry a much thinner frost than the floating player bar
+        // (0.34) and still keep their dark labels readable. The bar, nav bar
+        // and page panels are untouched.
         if popup {
-            return scheme == .dark
-                ? Color(red: 0.04, green: 0.04, blue: 0.08).opacity(0.72)
-                : Color(red: 0.10, green: 0.10, blue: 0.16).opacity(0.55)
+            // Fading the UIVisualEffectView to the shared 0.55 also weakens
+            // its blur on iOS, so a touch more milk frost keeps the playback
+            // controls behind the pane from punching through too sharply.
+            // macOS's `.menu` material keeps its blur and stays at 0.10.
+            #if os(iOS)
+            let frost: Double = popupsUseDarkPalette ? 0.10 : 0.20
+            #else
+            let frost: Double = 0.10
+            #endif
+            return popupsUseDarkPalette
+                ? Color(red: 0.05, green: 0.05, blue: 0.09).opacity(frost)
+                : .white.opacity(frost)
         }
         if strong {
             return scheme == .dark
@@ -255,13 +302,23 @@ struct GlassSurface<S: Shape>: View {
         return scheme == .dark ? .white.opacity(0.05) : .white.opacity(0.16)
     }
 
+    /// One shared popup transparency for both platforms (Option D). Everything
+    /// else — the floating player bar, nav bar, page panels — stays at full
+    /// strength, so nothing outside the player's popups changes.
+    private var blurOpacity: CGFloat {
+        popup ? 0.55 : 1
+    }
+
     private var hairline: Color {
         .white.opacity(scheme == .dark ? 0.10 : 0.24)
     }
 
     var body: some View {
         ZStack {
-            BlurEffectView(cornerRadius: radius)
+            BlurEffectView(cornerRadius: radius,
+                           thin: popup && AppearanceSettings.shared.usesGlass,
+                           dark: popupsUseDarkPalette,
+                           opacity: blurOpacity)
             fill
             // The lit top rim that sells the "glass" read.
             shape.fill(
@@ -278,8 +335,8 @@ struct GlassSurface<S: Shape>: View {
             }
         }
         .shadow(color: .black.opacity(scheme == .dark ? 0.30 : 0.10),
-                radius: strong ? 22 : 12,
-                y: strong ? 10 : 6)
+                radius: strong || popup ? 22 : 12,
+                y: strong || popup ? 10 : 6)
     }
 }
 
@@ -316,6 +373,9 @@ extension SurfaceRole {
             GlassSurface(shape: shape, tint: solid(palette),
                          border: palette.outline, radius: radius,
                          strong: strong, popup: popup)
+        } else if popup {
+            shape.fill(solid(palette))
+                .overlay { shape.fill(palette.primaryContainer.opacity(0.25)) }
         } else {
             shape.fill(solid(palette))
         }
@@ -337,30 +397,50 @@ func AppBackground(_ palette: M3Palette) -> some View {
     }
 }
 
-/// The palette the player's popups (EQ, audio chain, queue) paint with, in
-/// **both** themes.
+/// Solid / Morandi popup background: a soft wash of the theme's own container
+/// colour over the surface. Without it the panel is a near-fixed white (light)
+/// or black (dark) slab that does not read as part of the chosen theme.
+func popupPanelFill(_ palette: M3Palette) -> some View {
+    ZStack {
+        palette.surface
+        palette.primaryContainer.opacity(0.25)
+    }
+}
+
+/// The palette the player's popups (EQ, audio chain, queue) paint with.
 ///
-/// The player's own backdrop is the artwork blurred and darkened by a scrim;
-/// these panels sit on it, so they take a **dark, low-chroma** companion of the
-/// now-playing palette (same artwork-derived hue as the stage, just muted and
-/// dark) rather than the vivid one. That keeps the popup's colour in the same
-/// family as the background behind it — no bright, saturated slab — and the
-/// light-on-dark text stays legible. Solid and glass differ only in how the
-/// panel is rendered (opaque vs frosted), never in where its colour comes from.
+/// Every theme follows the resolved appearance: light panels with dark labels
+/// in light mode, dark panels with light labels in dark mode. Solid / Morandi
+/// used to be forced dark, which made a light-themed app show dark green slabs
+/// with loud accents. Morandi now uses the same quiet register as the window.
 func playerOverlayPalette(_ palette: M3Palette) -> M3Palette {
+    let dark = popupsUseDarkPalette
     // Morandi takes the same fixed palette as the rest of the window, in its
     // dark register, so the popups belong to the theme even though the stage
     // behind them keeps its artwork colour.
     if AppearanceSettings.shared.usesMorandi {
-        // vivid + a higher chroma scale than the windows: a popup floating on
-        // the dark stage needs its dusty colour to be *readable*, or every hue
-        // looks like the same grey slab.
+        // Same dusty ladder as `themePalette` — no `vivid`, no boosted chroma.
         return .morandi(hue: AppearanceSettings.shared.morandiHue,
-                        isDark: true, vivid: true, chromaScale: 0.62)
+                        isDark: dark)
     }
     let seed = PaletteSeed(hue: palette.seed.hue,
                            chroma: min(palette.seed.chroma, 0.18))
-    return M3Palette(seed: seed, isDark: true, vivid: false)
+    return M3Palette(seed: seed, isDark: dark, vivid: false)
+}
+
+/// Whether player popups paint dark. All themes follow the resolved
+/// appearance; there is no longer a theme-specific dark stage palette.
+private var popupsUseDarkPalette: Bool {
+    switch AppearanceSettings.shared.mode {
+    case .dark: return true
+    case .light: return false
+    case .system:
+        #if os(macOS)
+        return AppearanceSettings.shared.systemIsDark
+        #else
+        return UITraitCollection.current.userInterfaceStyle == .dark
+        #endif
+    }
 }
 
 /// The colour field behind the glass: a vivid, slowly drifting aurora built from
