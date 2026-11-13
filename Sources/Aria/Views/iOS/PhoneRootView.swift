@@ -361,6 +361,12 @@ struct PhoneNavBar: View {
     @Binding var destination: RailDestination
     let palette: M3Palette
 
+    /// The bar has to observe the appearance itself. Solid and frosted glass
+    /// share the *same* palette, so when the theme flips the only stored input
+    /// here is unchanged and SwiftUI skips re-running this body — the bar kept
+    /// its old material until the next navigation changed `destination`.
+    @ObservedObject private var appearance = AppearanceSettings.shared
+
     var body: some View {
         HStack(spacing: 4) {
             ForEach(RailDestination.allCases, id: \.self) { item in
@@ -383,11 +389,19 @@ struct PhoneNavBar: View {
                                              ? palette.onSurface : palette.onSurfaceVariant)
                     }
                     .frame(maxWidth: .infinity)
+                    // Same reason as the desktop rail: a plain button only
+                    // answers clicks on drawn pixels, so the title and the gap
+                    // under the icon were dead. This turns the whole column —
+                    // and the bar's vertical padding — into one target without
+                    // changing the bar's height (the padding moved in from the
+                    // HStack below).
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, 6)
         .background {
             // Same material *and* same outline family as the floating player
             // pill: a capsule. At radius 30 the bar read as a solid slab,
@@ -406,6 +420,10 @@ struct PhoneMiniPlayer: View {
     let onExpand: () -> Void
 
     @EnvironmentObject var player: AudioPlayer
+    /// Same reason as `PhoneNavBar`: the mini player's own inputs don't change
+    /// between Solid and glass, so it has to watch the appearance itself or it
+    /// keeps the previous material until something else forces a redraw.
+    @ObservedObject private var appearance = AppearanceSettings.shared
 
     var body: some View {
         HStack(spacing: 11) {

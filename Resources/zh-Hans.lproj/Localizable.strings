@@ -1,0 +1,8 @@
+/*
+    Aria uses its own in-app translation table (see Localization.swift) for all
+    of its own views. These bundles exist so AppKit knows the app supports
+    Simplified Chinese: without a zh-Hans.lproj, macOS resolves the app to
+    English only and every system-provided surface — the standard main-menu
+    items, NSOpenPanel buttons and labels, NSAlert buttons — stays in English
+    even on a Chinese system.
+*/

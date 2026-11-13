@@ -9,6 +9,11 @@ struct MiniPlayer: View {
 
     @EnvironmentObject var player: AudioPlayer
     @State private var isHovering = false
+    /// Same trap as the iOS nav bar: Solid and glass resolve to the same
+    /// palette, so this view's stored inputs do not change when the theme
+    /// flips and SwiftUI would keep the old material until the next redraw
+    /// for another reason. Watching the appearance makes the swap immediate.
+    @ObservedObject private var appearance = AppearanceSettings.shared
 
     var body: some View {
         HStack(spacing: 12) {

@@ -139,6 +139,13 @@ struct RailItem: View {
                     .font(.label(10.5, isSelected ? .semibold : .medium))
                     .foregroundStyle(isSelected ? palette.onSurface : palette.onSurfaceVariant)
             }
+            // Plain buttons only answer clicks on their drawn pixels, so the
+            // label under the icon — thin glyphs plus the gap around them —
+            // was nearly unhittable. One rectangular content shape over the
+            // whole item makes the icon, the gap and the title one target.
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }

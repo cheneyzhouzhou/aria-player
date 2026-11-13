@@ -199,18 +199,34 @@ struct SettingsView: View {
                             .foregroundStyle(p.onSurface)
                         themePicker
 
-                        row(L("Light / dark"), L("Choose light or dark, or follow the system."))
+                        row(L("Light / dark"))
                         modePicker
 
                         if !appearance.usesMorandi {
                             row(L("Theme colour"), L("Tints the library. The player takes its colour from the artwork instead."))
                             HueBar(hue: $palettes.libraryHue, palette: p)
                                 .frame(height: 30)
+                            // Directly under the colour bar, before the swatch
+                            // row: on a phone the bottom nav capsule floats
+                            // over the page, and moving this any lower would
+                            // leave the slider half hidden on the first screen.
+                            if appearance.usesGlass {
+                                row(L("Glass transparency"))
+                                HStack(spacing: 12) {
+                                    Slider(value: $appearance.glassTransparency, in: 0...1)
+                                        .tint(p.primary)
+                                    Text("\(Int(round(appearance.glassTransparency * 100)))%")
+                                        .font(.label(11, .medium))
+                                        .foregroundStyle(p.onSurfaceVariant)
+                                        .frame(width: 38, alignment: .trailing)
+                                }
+                            }
                             swatches
                         } else {
                             row(L("Theme colour"), L("Pick one of the muted Morandi accents. The player still takes its colour from the artwork."))
                             morandiSwatches
                         }
+
                     }
                 }
 
@@ -286,18 +302,13 @@ struct SettingsView: View {
                                         await library.scan()
                                     }
                                 })) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(L("Apple Music library"))
-                                        .font(.body(13, .medium))
-                                        .foregroundStyle(p.onSurface)
-                                    Text(L("Play songs already in the Music app"))
-                                        .font(.body(11))
-                                        .foregroundStyle(p.onSurfaceVariant)
-                                }
+                                Text(L("Apple Music library"))
+                                    .font(.body(13, .medium))
+                                    .foregroundStyle(p.onSurface)
                             }
                             .tint(p.primary)
 
-                            Text(L("Only DRM-free songs you imported or synced can be played. Apple Music subscription downloads are protected, so they are skipped. Aria never copies the audio files."))
+                            Text(L("Add a custom folder or songs from Apple Music. DRM-protected songs will be skipped."))
                                 .font(.body(11))
                                 .foregroundStyle(p.onSurfaceVariant)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -309,7 +320,7 @@ struct SettingsView: View {
                                     .foregroundStyle(p.primary)
                                     .fixedSize(horizontal: false, vertical: true)
                             } else if mediaLibrary.isEnabled {
-                                Text(String(format: L("%d playable · %d protected skipped"),
+                                Text(String(format: L("%d playable · %d DRM-protected skipped"),
                                             mediaLibrary.tracks.count,
                                             mediaLibrary.skippedCount))
                                     .font(.body(11))
@@ -325,7 +336,7 @@ struct SettingsView: View {
                                 .disabled(library.isScanning)
 
                             #if os(macOS)
-                            Button(L("Music app media…")) { addMusicAppFolder() }
+                            Button(L("Add Apple Music Library")) { addMusicAppFolder() }
                                 .buttonStyle(PillButtonStyle(kind: .tonal, palette: p))
                                 .disabled(library.isScanning)
                             #endif
@@ -342,7 +353,7 @@ struct SettingsView: View {
                         }
 
                         #if os(macOS)
-                        Text(L("Opens the Music app's media folder. Pick the Music subfolder for songs you imported or purchased; Apple Music subscription downloads are DRM-protected and will be skipped."))
+                        Text(L("Add a custom folder or songs from Apple Music. DRM-protected songs will be skipped."))
                             .font(.body(10.5))
                             .foregroundStyle(p.onSurfaceVariant)
                             .fixedSize(horizontal: false, vertical: true)
@@ -384,7 +395,7 @@ struct SettingsView: View {
                                 .foregroundStyle(p.onSurfaceVariant)
                                 .fixedSize(horizontal: false, vertical: true)
                         } else {
-                            Text(L("Aria asks the hardware to run at the file's own sample rate, so nothing is resampled on the way out."))
+                            Text(L("Aria tells the hardware to run at the music file's own sample rate."))
                                 .font(.body(11))
                                 .foregroundStyle(p.onSurfaceVariant)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -422,10 +433,6 @@ struct SettingsView: View {
 
                 section(L("Output mode")) {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text(L("How sound reaches the device"))
-                            .font(.body(11.5))
-                            .foregroundStyle(p.onSurfaceVariant)
-
                         HStack(alignment: .top, spacing: 12) {
                             ForEach(OutputMode.allCases, id: \.self) { mode in
                                 outputModeCard(mode)
@@ -643,6 +650,15 @@ struct SettingsView: View {
                         radius: Radius.card)
                 }
         }
+    }
+
+    /// Title-only row for settings whose behaviour is self-explanatory; the
+    /// detail line was deliberately dropped (both languages) to keep the page
+    /// compact.
+    private func row(_ title: String) -> some View {
+        Text(title)
+            .font(.body(13.5, .medium))
+            .foregroundStyle(p.onSurface)
     }
 
     private func row(_ title: String, _ detail: String) -> some View {

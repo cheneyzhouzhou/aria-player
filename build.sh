@@ -89,6 +89,12 @@ assemble() {
     cp "$binary" "$dest/Contents/MacOS/Aria"
     cp Resources/Info.plist "$dest/Contents/Info.plist"
     cp Resources/AppIcon.icns "$dest/Contents/Resources/AppIcon.icns"
+    # AppKit reads the .lproj folders to decide which language its own UI
+    # (standard menu items, open/save panels, alerts) should use. Without them
+    # the bundle resolves to English only, even on a Chinese system.
+    for lp in Resources/*.lproj; do
+        if [ -d "$lp" ]; then cp -R "$lp" "$dest/Contents/Resources/"; fi
+    done
     # The template plist says 1.0. Stamp the same version the zip is named
     # after, or the settings page would keep claiming every build is v1.0.
     # build-ipa.sh already does this for the device bundle; both platforms

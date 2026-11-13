@@ -69,6 +69,14 @@ final class AppearanceSettings: ObservableObject {
     @Published var morandiHue: Double {
         didSet { UserDefaults.standard.set(morandiHue, forKey: "ariaMorandiHue") }
     }
+    /// How see-through the frosted theme's panels are: 0 = densest frost,
+    /// 0.5 = the original look, 1 = most transparent. Persisted in didSet —
+    /// the settings Slider binds straight to this property (v102 lesson).
+    @Published var glassTransparency: Double {
+        didSet {
+            UserDefaults.standard.set(glassTransparency, forKey: "ariaGlassTransparency")
+        }
+    }
 
     init() {
         let raw = UserDefaults.standard.string(forKey: "ariaAppearanceTheme")
@@ -83,6 +91,8 @@ final class AppearanceSettings: ObservableObject {
             mode = AppearanceMode(rawValue: rawMode ?? "") ?? .light
         }
         morandiHue = UserDefaults.standard.object(forKey: "ariaMorandiHue") as? Double ?? 0.28
+        let savedGlass = UserDefaults.standard.object(forKey: "ariaGlassTransparency") as? Double
+        glassTransparency = min(max(savedGlass ?? 0.5, 0), 1)
         #if os(macOS)
         systemIsDark = UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"
         DistributedNotificationCenter.default().addObserver(
@@ -182,8 +192,8 @@ private struct PlatformBlur: UIViewRepresentable {
     var cornerRadius: CGFloat
     var thin: Bool = false
     var dark: Bool = false
-    /// Shared with macOS: player popups fade the blur layer itself to 0.55 so
-    /// both platforms read as the same open, see-through glass.
+    /// The glass group's presence (0...1): reaches 0 at 100% transparency so
+    /// the blur layer contributes nothing at all.
     var opacity: CGFloat = 1
     private var style: UIBlurEffect.Style {
         if !thin { return .systemMaterial }
@@ -210,10 +220,8 @@ private struct PlatformBlur: NSViewRepresentable {
     var cornerRadius: CGFloat
     var thin: Bool = false
     var dark: Bool = false
-    /// macOS's light materials are far denser than iOS's ultra-thin ones, so
-    /// popups use `.menu` (a complete blur) plus a shared 0.55 fade of the
-    /// whole effect view — the artwork behind them reads through without the
-    /// backing text punching through sharply.
+    /// The glass group's presence (0...1): reaches 0 at 100% transparency so
+    /// the material contributes nothing at all.
     var opacity: CGFloat = 1
     private var material: NSVisualEffectView.Material {
         thin ? .menu : .hudWindow
@@ -270,6 +278,57 @@ struct GlassSurface<S: Shape>: View {
     var popup: Bool = false
 
     @Environment(\.colorScheme) private var scheme
+    /// Every glass surface observes the slider so dragging it repaints the
+    /// whole window immediately, including the settings page itself.
+    @ObservedObject private var appearance = AppearanceSettings.shared
+
+    /// The slider is an *exact* two-ended control:
+    /// - `0`   — a genuinely opaque card (a solid fill at alpha 1, no blur
+    ///           contribution at all);
+    /// - `0.5` — byte-for-byte the original v105 frosted glass (every scale
+    ///           below is 1, nothing is added or faded);
+    /// - `1`   — genuinely 100% transparent: no blur, no frost, no rim, no
+    ///           border and no shadow — only the panel's own content remains.
+    ///
+    /// Below 50% a solid backing cross-fades in over the glass; above 50% the
+    /// whole glass group fades out on top of the v107 thinning. Scaling every
+    /// layer (rather than applying SwiftUI `.opacity` to the group) keeps the
+    /// native blur view functional on both platforms.
+    private var slider: Double {
+        appearance.usesGlass ? appearance.glassTransparency : 0.5
+    }
+    /// Presence of the frosted-glass group. Exactly 0 at 100% transparency.
+    private var glassPresence: CGFloat {
+        let t = slider
+        if t <= 0.5 { return CGFloat(t / 0.5) }              // 0 ... 1
+        let u = (t - 0.5) / 0.5                               // 0 ... 1
+        return CGFloat(max(0, 1 - u * u))                     // 1 ... 0
+    }
+    /// Presence of the solid backing that makes 0% genuinely opaque.
+    private var opaquePresence: CGFloat {
+        let t = slider
+        return t < 0.5 ? CGFloat(1 - t / 0.5) : 0             // 1 ... 0
+    }
+    /// Outline and shadow follow whichever layer is present, so they are full
+    /// strength at 0% and 50%, and completely gone at 100%.
+    private var surfacePresence: CGFloat {
+        max(glassPresence, opaquePresence)
+    }
+    private var frostScale: Double {
+        let t = slider
+        if t <= 0.5 { return 1 + (0.5 - t) * 3.0 }        // 1 ... 2.5
+        return max(0.10, 1 - (t - 0.5) * 1.8)             // 1 ... 0.10
+    }
+    private var blurScale: CGFloat {
+        let t = slider
+        if t <= 0.5 { return 1 }
+        return CGFloat(max(0.28, 1 - (t - 0.5) * 1.44))   // 1 ... 0.28
+    }
+    private func scaledFrost(_ base: Double, floor: Double = 0.01) -> Double {
+        // Multiplying *after* the clamp is what makes 100% leave no milk film
+        // at all — even the popup's 0.05 legibility floor has to disappear.
+        min(0.95, max(floor, base * frostScale)) * Double(glassPresence)
+    }
 
     /// White-frost fill following the reference's glass tokens — white at low
     /// alpha in light mode, a dark navy at higher alpha in dark mode. The colour
@@ -286,35 +345,57 @@ struct GlassSurface<S: Shape>: View {
             // controls behind the pane from punching through too sharply.
             // macOS's `.menu` material keeps its blur and stays at 0.10.
             #if os(iOS)
-            let frost: Double = popupsUseDarkPalette ? 0.10 : 0.20
+            let base: Double = popupsUseDarkPalette ? 0.10 : 0.20
             #else
-            let frost: Double = 0.10
+            let base: Double = 0.10
             #endif
+            // `scaledFrost` multiplies by glassPresence, so at 100% this film
+            // reaches exactly zero and the panel is truly clear.
             return popupsUseDarkPalette
-                ? Color(red: 0.05, green: 0.05, blue: 0.09).opacity(frost)
-                : .white.opacity(frost)
+                ? Color(red: 0.05, green: 0.05, blue: 0.09).opacity(scaledFrost(base, floor: 0.05))
+                : .white.opacity(scaledFrost(base, floor: 0.05))
         }
         if strong {
             return scheme == .dark
-                ? Color(red: 0.05, green: 0.05, blue: 0.09).opacity(0.55)
-                : .white.opacity(0.34)
+                ? Color(red: 0.05, green: 0.05, blue: 0.09).opacity(scaledFrost(0.55))
+                : .white.opacity(scaledFrost(0.34))
         }
-        return scheme == .dark ? .white.opacity(0.05) : .white.opacity(0.16)
+        return scheme == .dark
+            ? .white.opacity(scaledFrost(0.05))
+            : .white.opacity(scaledFrost(0.16))
     }
 
-    /// One shared popup transparency for both platforms (Option D). Everything
-    /// else — the floating player bar, nav bar, page panels — stays at full
-    /// strength, so nothing outside the player's popups changes.
+    /// The native blur view is faded by both the v107 thinning and the glass
+    /// group's presence. Popups are no longer pinned to a floor: at 100% every
+    /// glass surface — EQ, audio chain, queue included — must be fully clear,
+    /// and at 0% the solid backing hides the blur entirely. At the 50% anchor
+    /// popups stay at the shared 0.55, matching v108.
     private var blurOpacity: CGFloat {
-        popup ? 0.55 : 1
+        let base: CGFloat = popup ? 0.55 : 1
+        return base * blurScale * glassPresence
     }
 
     private var hairline: Color {
-        .white.opacity(scheme == .dark ? 0.10 : 0.24)
+        .white.opacity((scheme == .dark ? 0.10 : 0.24) * Double(glassPresence))
     }
 
     var body: some View {
         ZStack {
+            // 0% endpoint — a genuinely opaque card. `tint` is the surface
+            // role's own solid colour (alpha 1), so the artwork/aurora behind
+            // the panel cannot show through at all. Inner cards get a subtle
+            // elevation wash so the hierarchy survives once every surface is
+            // solid; the hairline alone would be too faint in light mode.
+            if opaquePresence > 0 {
+                ZStack {
+                    shape.fill(tint)
+                    if !(strong || popup) {
+                        shape.fill((scheme == .dark ? Color.white : Color.black)
+                            .opacity(0.05))
+                    }
+                }
+                .opacity(Double(opaquePresence))
+            }
             BlurEffectView(cornerRadius: radius,
                            thin: popup && AppearanceSettings.shared.usesGlass,
                            dark: popupsUseDarkPalette,
@@ -323,7 +404,8 @@ struct GlassSurface<S: Shape>: View {
             // The lit top rim that sells the "glass" read.
             shape.fill(
                 LinearGradient(
-                    colors: [.white.opacity(scheme == .dark ? 0.10 : 0.26), .clear],
+                    colors: [.white.opacity((scheme == .dark ? 0.10 : 0.26)
+                                            * Double(glassPresence)), .clear],
                     startPoint: .top, endPoint: .center)
             )
             .allowsHitTesting(false)
@@ -331,10 +413,17 @@ struct GlassSurface<S: Shape>: View {
         .clipShape(shape)
         .overlay {
             if showBorder {
-                shape.stroke(hairline, lineWidth: 1)
+                ZStack {
+                    shape.stroke(hairline, lineWidth: 1)
+                    if opaquePresence > 0 {
+                        shape.stroke(border.opacity(0.45 * Double(opaquePresence)),
+                                     lineWidth: 1)
+                    }
+                }
             }
         }
-        .shadow(color: .black.opacity(scheme == .dark ? 0.30 : 0.10),
+        .shadow(color: .black.opacity((scheme == .dark ? 0.30 : 0.10)
+                                      * Double(surfacePresence)),
                 radius: strong || popup ? 22 : 12,
                 y: strong || popup ? 10 : 6)
     }

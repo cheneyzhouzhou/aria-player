@@ -33,18 +33,33 @@ enum AppLanguage: String, CaseIterable, Identifiable, Codable {
 /// actor isolation getting in the way of the localization helpers.
 final class LanguageSettings: ObservableObject {
     static let shared = LanguageSettings()
+    private static let key = "appLanguage"
 
-    @Published var language: AppLanguage
-
-    init() {
-        let raw = UserDefaults.standard.string(forKey: "appLanguage")
-        language = AppLanguage(rawValue: raw ?? "") ?? .english
+    /// Persisting in `didSet` is the whole point: the settings Picker binds
+    /// straight to `$lang.language`, so the old explicit `set()` helper was
+    /// never called — the choice lived only in memory and was lost as soon as
+    /// the app was force-quit. Any write path now survives a relaunch.
+    @Published var language: AppLanguage {
+        didSet {
+            guard language != oldValue else { return }
+            UserDefaults.standard.set(language.rawValue, forKey: Self.key)
+            #if os(macOS)
+            AppKitLanguage.sync()
+            #endif
+        }
     }
 
-    /// Persist and publish in one step.
+    init() {
+        let raw = UserDefaults.standard.string(forKey: Self.key)
+        language = AppLanguage(rawValue: raw ?? "") ?? .english
+        #if os(macOS)
+        AppKitLanguage.sync()
+        #endif
+    }
+
+    /// Kept for callers that prefer an explicit setter; `didSet` owns saving.
     func set(_ next: AppLanguage) {
         language = next
-        UserDefaults.standard.set(next.rawValue, forKey: "appLanguage")
     }
 
     var isChinese: Bool { language == .chineseSimplified }
@@ -73,6 +88,7 @@ enum L10n {
         "Nothing here yet": "这里还什么都没有",
         "Songs, albums, artists": "歌曲、专辑、艺人",
         "Add folder": "添加文件夹",
+        "Add a folder": "添加文件夹",
         "Rescan": "重新扫描",
         "Find something to play": "找点音乐来播放",
         "Scanning your music folders…": "正在扫描你的音乐文件夹…",
@@ -83,6 +99,7 @@ enum L10n {
         "Appearance": "外观",
         "Language": "语言",
         "Theme colour": "主题颜色",
+        "Glass transparency": "毛玻璃透明度",
         "Tints the library. The player takes its colour from the artwork instead.": "为音乐库着色。播放器则会从封面中提取颜色。",
 
         // Settings — appearance / theme
@@ -95,20 +112,18 @@ enum L10n {
         "System": "跟随系统",
         "Light": "浅色",
         "Dark": "深色",
-        "Choose light or dark, or follow the system.": "选择浅色或深色，或跟随系统。",
         "Solid keeps Aria's current colour and surfaces. Frosted glass blurs the view behind each panel for a softer, layered look.": "“纯色”沿用 Aria 当前的配色与表面；“毛玻璃”会令每个面板背后的内容产生模糊，呈现更柔和、更具层次感的效果。",
 
         // Settings — music folders
+        "Show song title in menu bar": "在菜单栏显示歌名",
         "Music folders": "音乐文件夹",
         "Add folder…": "添加文件夹…",
         "Scanning…": "正在扫描…",
-        "Music app media…": "音乐 App 媒体目录…",
-        "Opens the Music app's media folder. Pick the Music subfolder for songs you imported or purchased; Apple Music subscription downloads are DRM-protected and will be skipped.": "将打开「音乐」App 的媒体文件夹。选择其中的 Music 子文件夹，即可播放你导入或购买的歌曲；Apple Music 订阅下载的曲目受版权保护，会被跳过。",
+        "Add Apple Music Library": "添加Apple Music音乐库",
+        "Add a custom folder or songs from Apple Music. DRM-protected songs will be skipped.": "添加自定义文件夹或Apple Music内的歌曲，受版权保护的歌曲将被跳过。",
         "Apple Music library": "Apple Music 音乐库",
-        "Play songs already in the Music app": "播放「音乐」App 中已有的歌曲",
-        "Only DRM-free songs you imported or synced can be played. Apple Music subscription downloads are protected, so they are skipped. Aria never copies the audio files.": "仅可播放你自行导入或同步、且无版权保护的歌曲。Apple Music 订阅下载的曲目受保护，会被跳过。Aria 不会复制任何音频文件。",
         "Media access denied. Enable Music in iOS Settings to use this.": "媒体库访问被拒绝。请在 iOS 设置中允许访问「音乐」后重试。",
-        "%d playable · %d protected skipped": "%d 首可播放 · %d 首受保护已跳过",
+        "%d playable · %d DRM-protected skipped": "%d 首可播放 · %d 首受保护已跳过",
         "Music app": "音乐 App",
         "Unknown title": "未知曲目",
         "Unknown artist": "未知艺人",
@@ -120,11 +135,10 @@ enum L10n {
         "Refresh": "刷新",
         "No output devices found.": "未找到输出设备。",
         "Output mode": "输出模式",
-        "How sound reaches the device": "声音如何送达设备",
         "Exclusive mode changes the device's clock rate for the whole system and mutes other apps using it. Aria releases the device when you switch back to Shared or quit. If the device refuses the rate or exclusive access, playback falls back to Shared automatically.": "独占模式会改变整个系统的设备时钟频率，并静音其他正在使用它的应用。当你切回“共享”或退出 Aria 时，设备会被释放。如果设备拒绝该频率或独占访问，播放会自动回退到“共享”模式。",
         "Playing through": "正在通过",
         "Bluetooth re-encodes audio before it reaches your headphones, so lossless files stop being lossless at that point. Wired headphones or a USB-C DAC keep the full quality.": "蓝牙会在声音到达耳机前重新编码，因此无损文件到这一步便不再是无损。有线耳机或 USB-C DAC 能保留完整音质。",
-        "Aria asks the hardware to run at the file's own sample rate, so nothing is resampled on the way out.": "Aria 会让硬件以文件自身的采样率运行，因此输出过程中不会进行任何重采样。",
+        "Aria tells the hardware to run at the music file's own sample rate.": "Aria会通知硬件以音乐文件自身的采样率运行。",
 
         // Settings — library
         "Last scanned": "上次扫描",
@@ -329,9 +343,11 @@ enum L10n {
         "Just now": "刚刚",
 
         // Folder browser (iOS)
+        "Folders Aria can read on this phone": "Aria 可读取的本机文件夹",
         "No folders inside this one.": "这个文件夹里没有子文件夹。",
         "No music files here or below.": "这里及其子文件夹中没有音乐文件。",
         "Use this folder": "使用此文件夹",
+        "Use Folder": "使用此文件夹",
         "Empty": "空",
         "Can't read this folder": "无法读取该文件夹",
         "app container": "应用容器",

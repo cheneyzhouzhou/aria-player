@@ -1,0 +1,4 @@
+/*
+    English development region. Kept alongside zh-Hans.lproj so a Mac running
+    in English still resolves the app's system-provided surfaces to English.
+*/

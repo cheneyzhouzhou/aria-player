@@ -11,11 +11,17 @@ final class MenuBarSettings: ObservableObject {
     static let shared = MenuBarSettings()
     private static let key = "ariaMenuBarPlayer"
 
+    private static let titleKey = "ariaMenuBarShowsTitle"
+
     @Published var isEnabled: Bool {
         didSet {
             guard isEnabled != oldValue else { return }
             UserDefaults.standard.set(isEnabled, forKey: Self.key)
         }
+    }
+    /// The title item can be hidden, leaving only the 65pt transport row.
+    @Published var showsTitle: Bool {
+        didSet { UserDefaults.standard.set(showsTitle, forKey: Self.titleKey) }
     }
 
     init() {
@@ -28,6 +34,7 @@ final class MenuBarSettings: ObservableObject {
         } else {
             isEnabled = defaults.bool(forKey: Self.key)
         }
+        showsTitle = defaults.object(forKey: Self.titleKey) as? Bool ?? true
     }
 }
 
@@ -43,18 +50,21 @@ final class MenuBarSettings: ObservableObject {
 final class MenuBarPlayer: NSObject, NSMenuDelegate {
     static let shared = MenuBarPlayer()
 
-    /// Long titles would push every other status item aside.
+    /// Long titles are capped so the row stays a reasonable size.
     private static let maxTitleLength = 26
-    /// Long titles are capped so they never push every other status item aside.
-    private static let maxTitleWidth: CGFloat = 170
-    /// The status bar pins an item's RIGHT edge. When this item's length changes
-    /// macOS moves its left edge, so the transport buttons on the right stay at
-    /// the same screen position even though the title changes width. A fixed
-    /// row width is neither needed nor desirable: it leaves a wide dead gap
-    /// between a short title and the buttons.
     private static let glyphSize: CGFloat = 17
+    /// Both items keep a constant length, so macOS never reflows the status bar
+    /// on a track change. The title's spare width sits at the transparent left
+    /// edge of its own item, never between the name and the controls.
+    private static let titleSlotWidth: CGFloat = 120
+    /// The transport controls live in their own fixed-width status item, so a
+    /// title change can never move them or make them overlap a neighbour.
+    private static let controlWidth: CGFloat = 3 * (17 + 2) + 8   // 65
 
-    private var item: NSStatusItem?
+    /// Two independent items: the title may resize on a track change, the
+    /// transport row never does.
+    private var titleItem: NSStatusItem?
+    private var controlItem: NSStatusItem?
     private var menu: NSMenu?
     private var player: AudioPlayer?
     private var subs = Set<AnyCancellable>()
@@ -106,20 +116,25 @@ final class MenuBarPlayer: NSObject, NSMenuDelegate {
     }
 
     private func install() {
-        guard item == nil else {
+        guard titleItem == nil, controlItem == nil else {
             refresh()
             return
         }
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        guard let button = item.button else { return }
+        // macOS places later items to the LEFT of earlier ones, so creating the
+        // controls first puts the title immediately on their left.
+        let controls = NSStatusBar.system.statusItem(withLength: Self.controlWidth)
+        let title = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        guard let controlButton = controls.button, let titleButton = title.button else { return }
 
-        button.title = ""
-        button.image = nil
-        // No `item.menu`: every click is routed by `statusButtonClicked`, which
-        // decides between a transport action and opening the menu.
-        button.target = self
-        button.action = #selector(statusButtonClicked)
-        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        for button in [controlButton, titleButton] {
+            button.title = ""
+            button.image = nil
+            // No `item.menu`: clicks are dispatched by position.
+            button.target = self
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        }
+        controlButton.action = #selector(controlClicked)
+        titleButton.action = #selector(titleClicked)
 
         titleLabel.font = .systemFont(ofSize: 12.5, weight: .medium)
         titleLabel.lineBreakMode = .byTruncatingTail
@@ -127,30 +142,34 @@ final class MenuBarPlayer: NSObject, NSMenuDelegate {
         titleLabel.isBordered = false
         titleLabel.usesSingleLineMode = true
 
-        for view in [iconView, titleLabel, previousGlyph, playGlyph, nextGlyph] as [NSView] {
-            button.addSubview(view)
+        for view in [iconView, titleLabel] as [NSView] { titleButton.addSubview(view) }
+        for glyph in [previousGlyph, playGlyph, nextGlyph] as [NSView] {
+            controlButton.addSubview(glyph)
         }
 
         let menu = NSMenu()
         menu.delegate = self
         self.menu = menu
-        self.item = item
+        self.titleItem = title
+        self.controlItem = controls
         refresh()
     }
 
     private func uninstall() {
-        if let item {
-            NSStatusBar.system.removeStatusItem(item)
-        }
-        item = nil
+        if let titleItem { NSStatusBar.system.removeStatusItem(titleItem) }
+        if let controlItem { NSStatusBar.system.removeStatusItem(controlItem) }
+        titleItem = nil
+        controlItem = nil
         menu = nil
     }
 
     /// Rebuilds the row and its width. Called on every track / play-state change
     /// and on install.
     private func refresh() {
-        guard let item, let button = item.button else { return }
-        let height = button.bounds.height > 0 ? button.bounds.height : 22
+        guard let titleItem, let controlItem,
+              let titleButton = titleItem.button,
+              let controlButton = controlItem.button else { return }
+        let height = controlButton.bounds.height > 0 ? controlButton.bounds.height : 22
         let playing = player?.isPlaying == true
         let hasTrack = player?.current != nil
         let tint = menuBarTint()
@@ -169,36 +188,36 @@ final class MenuBarPlayer: NSObject, NSMenuDelegate {
             glyph.contentTintColor = tint.withAlphaComponent(hasTrack ? 1 : 0.35)
         }
 
-        var x: CGFloat = 5
+        // Title item: icon + name right-aligned inside a fixed slot.
+        titleLabel.sizeToFit()
+        let titleWidth = ceil(min(titleLabel.frame.width + 1,
+                                  Self.titleSlotWidth - 30))
+        let contentWidth: CGFloat = 5 + 14 + 5 + titleWidth + 6
+        var x: CGFloat = Self.titleSlotWidth - contentWidth + 5
         iconView.frame = NSRect(x: x, y: (height - 14) / 2, width: 14, height: 14)
         x += 14 + 5
-
-        // Round the measured width: keeping every x an integer means
-        // `item.length` and the glyph origins move in lockstep, so the buttons
-        // do not jitter by half a point on a track change.
-        titleLabel.sizeToFit()
-        let titleWidth = ceil(min(titleLabel.frame.width + 1, Self.maxTitleWidth))
         titleLabel.frame = NSRect(x: x, y: (height - 17) / 2, width: titleWidth, height: 17)
-        x += titleWidth + 6
+        titleItem.length = Self.titleSlotWidth
+        titleItem.isVisible = MenuBarSettings.shared.showsTitle
 
+        // Control item: three glyphs in a slot whose width never changes.
+        var cx: CGFloat = 4
         for glyph in [previousGlyph, playGlyph, nextGlyph] {
-            glyph.frame = NSRect(x: x, y: (height - Self.glyphSize) / 2,
+            glyph.frame = NSRect(x: cx, y: (height - Self.glyphSize) / 2,
                                  width: Self.glyphSize, height: Self.glyphSize)
-            x += Self.glyphSize + 2
+            cx += Self.glyphSize + 2
         }
-        x += 4
+        controlItem.length = Self.controlWidth
 
-        // Only the left edge of the status item follows the title; its right
-        // edge — and therefore the three controls — is anchored by macOS.
-        item.length = ceil(x)
-        button.toolTip = player?.current.map { "\($0.title) — \($0.artist)" } ?? L("Aria")
+        titleButton.toolTip = player?.current.map { "\($0.title) — \($0.artist)" } ?? L("Aria")
+        controlButton.toolTip = L("Aria")
     }
 
     /// The colour the menu bar is using right now. Resolved inside the status
     /// bar's own appearance rather than the app's, so the row still matches when
     /// Aria forces a light or dark window of its own.
     private func menuBarTint() -> NSColor {
-        guard let appearance = item?.button?.effectiveAppearance else { return .labelColor }
+        guard let appearance = controlItem?.button?.effectiveAppearance else { return .labelColor }
         var tint = NSColor.labelColor
         appearance.performAsCurrentDrawingAppearance {
             tint = NSColor.labelColor
@@ -226,21 +245,23 @@ final class MenuBarPlayer: NSObject, NSMenuDelegate {
 
     /// Every click lands here — the row's parts let the event through — and is
     /// routed by where it fell.
-    @objc private func statusButtonClicked() {
+    @objc private func controlClicked() {
         if NSApp.currentEvent?.type == .rightMouseUp {
-            showMenu()
+            showMenu(from: controlItem)
             return
         }
-        guard let button = item?.button, let window = button.window else {
-            showMenu()
+        guard let button = controlItem?.button, let window = button.window else {
+            showMenu(from: controlItem)
             return
         }
         let inWindow = window.convertPoint(fromScreen: NSEvent.mouseLocation)
         let point = button.convert(inWindow, from: nil)
+        if !handleClick(at: point) { showMenu(from: controlItem) }
+    }
 
-        if !handleClick(at: point) {
-            showMenu()
-        }
+    /// Clicking the title (or right-clicking the controls) opens the full menu.
+    @objc private func titleClicked() {
+        showMenu(from: titleItem)
     }
 
     /// Returns true when the point hit one of the three controls.
@@ -265,7 +286,7 @@ final class MenuBarPlayer: NSObject, NSMenuDelegate {
         return false
     }
 
-    @objc private func showMenu() {
+    private func showMenu(from item: NSStatusItem?) {
         guard let item, let menu, let button = item.button else { return }
         menuNeedsUpdate(menu)
         menu.popUp(positioning: nil,
@@ -310,6 +331,11 @@ final class MenuBarPlayer: NSObject, NSMenuDelegate {
         menu.addItem(repeatItem)
 
         menu.addItem(.separator())
+
+        let titleToggle = command(L("Show song title in menu bar"), "textformat",
+                                  #selector(toggleTitleVisibility))
+        titleToggle.state = MenuBarSettings.shared.showsTitle ? .on : .off
+        menu.addItem(titleToggle)
 
         menu.addItem(command(L("Show Aria"), "macwindow", #selector(showApp)))
         menu.addItem(command(L("Quit Aria"), "power", #selector(quitApp)))
@@ -377,6 +403,11 @@ final class MenuBarPlayer: NSObject, NSMenuDelegate {
         case .all: player.repeatMode = .one
         case .one: player.repeatMode = .off
         }
+    }
+
+    @objc private func toggleTitleVisibility() {
+        MenuBarSettings.shared.showsTitle.toggle()
+        refresh()
     }
 
     @objc private func showApp() {

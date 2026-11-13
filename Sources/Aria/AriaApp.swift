@@ -96,7 +96,7 @@ struct AriaApp: App {
             }
 
             CommandGroup(after: .sidebar) {
-                Button(L("Rescan Library")) {
+                Button(L("Rescan library")) {
                     Task { await library.scan() }
                 }
                 .keyboardShortcut("r", modifiers: .command)
@@ -128,6 +128,10 @@ struct AriaApp: App {
 /// icon (or "Show All Windows") sends a reopen event that nobody handled,
 /// leaving Aria running but invisible. These two hooks close that gap.
 private final class MacAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        AppKitLanguage.relaunchIfNeeded()
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
@@ -137,6 +141,38 @@ private final class MacAppDelegate: NSObject, NSApplicationDelegate {
         if !flag { MacWindowBridge.shared.restore() }
         NSApp.activate(ignoringOtherApps: true)
         return true
+    }
+}
+
+/// AppKit decides the language of its own UI (standard menu items, open/save
+/// panels, alert buttons) once, at process launch, from the app-domain
+/// `AppleLanguages` preference. It does not read our `L()` table, and changing
+/// the preference at runtime cannot refresh that decision.
+///
+/// So every language change is written to disk immediately, and a launch that
+/// resolved a *different* language relaunches once so the new process picks up
+/// the synced value. A correctly synced launch never relaunches.
+enum AppKitLanguage {
+    static func sync() {
+        let raw = UserDefaults.standard.string(forKey: "appLanguage") ?? "en"
+        UserDefaults.standard.set([raw], forKey: "AppleLanguages")
+        UserDefaults.standard.synchronize()
+    }
+
+    static func relaunchIfNeeded() {
+        let want = UserDefaults.standard.string(forKey: "appLanguage") ?? "en"
+        let resolved = Bundle.main.preferredLocalizations.first ?? "en"
+        let matches = want == "zh-Hans" ? resolved.hasPrefix("zh") : resolved.hasPrefix("en")
+        guard !matches else { return }
+        sync()
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        config.activates = true
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL,
+                                           configuration: config) { _, error in
+            guard error == nil else { return }
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+        }
     }
 }
 

@@ -122,7 +122,9 @@ enum Platform {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.directoryURL = URL(fileURLWithPath: path)
-        panel.prompt = "Use Folder"
+        // The rest of the panel (Cancel, sidebar, column headers) is
+        // localised by AppKit once the bundle declares zh-Hans support.
+        panel.prompt = L("Use Folder")
         if panel.runModal() == .OK, let url = panel.url {
             completion(url.path)
         }
