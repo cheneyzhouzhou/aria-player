@@ -109,11 +109,11 @@ covers are blurred, so no artwork is reproduced here.*
 
 Grab the latest build from **[Releases](https://github.com/cheneyzhouzhou/aria-player/releases/latest)**:
 
-| File | What it is |
+| Asset | What it is |
 |---|---|
-| `Aria-v114.ipa` | iOS, unsigned — re-sign with Sideloadly / AltStore |
-| `Aria-v114-macOS.zip` | macOS, Apple Silicon |
-| `Aria-v114-macOS-universal.zip` | macOS, Apple Silicon + Intel |
+| iOS `.ipa` | iOS 17+, unsigned — re-sign with Sideloadly / AltStore |
+| `…-macOS.zip` | macOS 14+, Apple Silicon |
+| `…-macOS-universal.zip` | macOS 14+, Apple Silicon + Intel |
 
 - **iOS**: sideload the IPA. A free Apple ID signature lasts 7 days; re-sign when it expires.
 - **macOS**: unzip and drag `Aria.app` into Applications. If Gatekeeper blocks the first
@@ -251,9 +251,9 @@ Aria 都不做：它遍历一个文件夹，自己解析元数据，然后把文
 
 | 文件 | 说明 |
 |---|---|
-| `Aria-v114.ipa` | iOS 未签名包，用 Sideloadly / AltStore 重签 |
-| `Aria-v114-macOS.zip` | macOS，Apple Silicon |
-| `Aria-v114-macOS-universal.zip` | macOS，Apple Silicon + Intel 通用 |
+| iOS `.ipa` | iOS 17+ 未签名包，用 Sideloadly / AltStore 重签 |
+| `…-macOS.zip` | macOS 14+，Apple Silicon |
+| `…-macOS-universal.zip` | macOS 14+，Apple Silicon + Intel 通用 |
 
 - **iOS**：侧载 IPA；免费 Apple ID 签名 7 天有效，到期重签即可。
 - **macOS**：解压后把 `Aria.app` 拖进「应用程序」；首次打开若被拦截，右键 → 打开。
