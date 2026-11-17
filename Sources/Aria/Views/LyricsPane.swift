@@ -62,16 +62,16 @@ struct LyricsPane: View {
             let active = lyrics.index(at: currentTime)
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
-                    LazyVStack(alignment: .leading, spacing: 16) {
+                    LazyVStack(alignment: .center, spacing: 16) {
                         ForEach(Array(lyrics.lines.enumerated()), id: \.element.id) { index, line in
                             Text(line.text.isEmpty ? "♪" : line.text)
-                                .font(.body(index == active ? 18 : 15,
+                                .font(.body(index == active ? 19 : 16,
                                             index == active ? .semibold : .regular))
                                 .foregroundStyle(index == active
                                                  ? primary
                                                  : secondary.opacity(0.7))
-                                .multilineTextAlignment(.leading)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .multilineTextAlignment(.center)
+                                .frame(maxWidth: .infinity, alignment: .center)
                                 .animation(.easeOut(duration: 0.2), value: active)
                                 .id(line.id)
                         }

@@ -475,7 +475,7 @@ extension SurfaceRole {
 
 /// The app's base background. In the glass theme this is a soft, hue-derived
 /// gradient so the frosted panels have something rich to blur; in the solid
-/// theme it is the flat Material surface.
+/// theme it is the flat Material surface, unchanged by the album in play.
 func AppBackground(_ palette: M3Palette) -> some View {
     Group {
         if AppearanceSettings.shared.usesGlass {
@@ -570,25 +570,43 @@ struct GlassAurora: View {
         let slow = time * 0.10
         let slower = time * 0.074
 
-        let base1 = Color(hue: wrap(hue - 0.06), saturation: 0.72, brightness: dim ? 0.52 : 0.96)
-        let base2 = Color(hue: wrap(hue + 0.08), saturation: 0.74, brightness: dim ? 0.44 : 0.92)
-        let base3 = Color(hue: wrap(hue + 0.22), saturation: 0.60, brightness: dim ? 0.34 : 0.88)
-        let blobWarm = Color(hue: wrap(hue + 0.62), saturation: 0.60, brightness: dim ? 0.40 : 0.92)
-        let blobCool = Color(hue: wrap(hue - 0.42), saturation: 0.55, brightness: dim ? 0.30 : 0.90)
+        // A desktop window is three times wider than a phone, so the same hue
+        // spread that reads as a gentle wash on a phone turns into a colour
+        // patchwork across a Mac window: the third stop and the two orbiting
+        // blobs used to sit up to 0.6 of the wheel away from the album's own
+        // hue. Tighten the palette there — the drift is unchanged, only the
+        // distance it travels.
+        #if os(macOS)
+        let spread = 0.15   // hue offsets
+        let sat = 0.62      // saturation
+        let blob = 0.40     // blob strength
+        let veil = 1.25     // light-mode white wash
+        #else
+        let spread = 1.0
+        let sat = 1.0
+        let blob = 1.0
+        let veil = 1.0
+        #endif
+
+        let base1 = Color(hue: wrap(hue - 0.06 * spread), saturation: 0.72 * sat, brightness: dim ? 0.52 : 0.96)
+        let base2 = Color(hue: wrap(hue + 0.08 * spread), saturation: 0.74 * sat, brightness: dim ? 0.44 : 0.92)
+        let base3 = Color(hue: wrap(hue + 0.22 * spread), saturation: 0.60 * sat, brightness: dim ? 0.34 : 0.88)
+        let blobWarm = Color(hue: wrap(hue + 0.62 * spread), saturation: 0.60 * sat, brightness: dim ? 0.40 : 0.92)
+        let blobCool = Color(hue: wrap(hue - 0.42 * spread), saturation: 0.55 * sat, brightness: dim ? 0.30 : 0.90)
 
         return ZStack {
             LinearGradient(colors: [base1, base2, base3],
                            startPoint: .topLeading, endPoint: .bottomTrailing)
 
             RadialGradient(
-                colors: [blobWarm.opacity(0.85), .clear],
+                colors: [blobWarm.opacity(0.85 * blob), .clear],
                 center: UnitPoint(x: 0.62 + 0.24 * cos(slow),
                                   y: 0.22 + 0.18 * sin(slow * 0.9)),
                 startRadius: 0, endRadius: 860
             )
 
             RadialGradient(
-                colors: [blobCool.opacity(0.70), .clear],
+                colors: [blobCool.opacity(0.70 * blob), .clear],
                 center: UnitPoint(x: 0.32 + 0.24 * cos(slower + 1.7),
                                   y: 0.80 + 0.16 * sin(slower)),
                 startRadius: 0, endRadius: 740
@@ -597,7 +615,8 @@ struct GlassAurora: View {
             if !dim {
                 // Soften light mode with a white veil so text and glass stay calm
                 // over the saturated aurora.
-                LinearGradient(colors: [.white.opacity(0.52), .white.opacity(0.30)],
+                LinearGradient(colors: [.white.opacity(min(0.85, 0.52 * veil)),
+                                        .white.opacity(min(0.85, 0.30 * veil))],
                                startPoint: .top, endPoint: .bottom)
             }
         }

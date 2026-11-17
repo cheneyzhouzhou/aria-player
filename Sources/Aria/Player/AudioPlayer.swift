@@ -83,6 +83,12 @@ final class AudioPlayer: ObservableObject {
     /// (or until the stack ran out).
     private var loadFailStreak = 0
     private var ticker: Timer?
+    /// Where the blocking half of a track change runs: opening the file and
+    /// reconfiguring the audio session both block for hundreds of milliseconds
+    /// — the session rate switch can block for over a second while
+    /// `mediaserverd` tears the hardware down — and doing that on the main
+    /// thread made the whole UI (menus included) stop answering.
+    private let loadQueue = DispatchQueue(label: "com.example.aria.load", qos: .userInitiated)
 
     #if os(iOS)
     /// A pending "did playback really start?" check — see `armWatchdog`.
@@ -382,34 +388,66 @@ final class AudioPlayer: ObservableObject {
         #endif
         node.stop()
         generation += 1
+        let startedGeneration = generation
         #if os(iOS)
         // A fresh track gets a fresh repair budget and a liveness check.
         rearmCount = 0
         watchdog?.cancel()
         #endif
 
-        // `length == 0` would open fine and then schedule nothing: the node
-        // would "play" silence, so treat it as unreadable instead.
-        guard let audioFile = try? AVAudioFile(forReading: track.url),
-              audioFile.length > 0 else {
-            // A file that vanished or won't decode shouldn't wedge the queue.
-            // Stay honest about the transport state too: leaving `isPlaying`
-            // true here is what showed a playing-looking progress bar that
-            // never moved.
-            current = track
-            duration = 0
-            isPlaying = false
-            loadFailStreak += 1
-            if queue.count > 1, loadFailStreak < queue.count {
-                next(userInitiated: false)
-            } else {
-                loadFailStreak = 0
-                stop()
-            }
-            return
-        }
-        loadFailStreak = 0
+        loadQueue.async { [weak self] in
+            // Synchronous I/O: opening a file reads its headers and can block on
+            // a slow or remote volume, so it never runs on the main thread.
+            let opened = try? AVAudioFile(forReading: track.url)
+            // Keep the session alive, but leave the rate request below: asking
+            // for the same rate twice per track made the second request land on
+            // a freshly started engine and invalidate it, which showed up as a
+            // configuration change and a repair restart.
+            self?.activateSession()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                // Another track was asked for while this one was opening.
+                guard self.generation == startedGeneration else { return }
+                guard let opened, opened.length > 0 else {
+                    self.failLoad(track)
+                    return
+                }
 
+                // Only a hardware rate change needs the engine taken down (it
+                // must not be running while the session is reconfigured). A
+                // track whose format matches the running graph is switched in
+                // place: measured at 10-15 ms, against 110-135 ms for a full
+                // stop/start — and that stop was what still hiccupped the UI.
+                if self.needsSessionRateChange(for: opened.processingFormat) {
+                    if self.engine.isRunning { self.engine.stop() }
+                    self.loadQueue.async { [weak self] in
+                        self?.applySessionRate(opened.processingFormat)
+                        Task { @MainActor [weak self] in
+                            guard let self, self.generation == startedGeneration else { return }
+                            self.install(opened, track: track, autoplay: autoplay)
+                        }
+                    }
+                } else {
+                    self.install(opened, track: track, autoplay: autoplay)
+                }
+            }
+        }
+    }
+
+    /// True when the hardware has to be reconfigured for this file.
+    private func needsSessionRateChange(for format: AVAudioFormat) -> Bool {
+        #if os(iOS)
+        return abs(AVAudioSession.sharedInstance().sampleRate - format.sampleRate) > 1
+        #else
+        return false
+        #endif
+    }
+
+    /// Publishes the freshly opened file: state, graph, scheduling, autoplay.
+    /// Everything here is cheap — the expensive half already happened on
+    /// `loadQueue`.
+    private func install(_ audioFile: AVAudioFile, track: Track, autoplay: Bool) {
+        loadFailStreak = 0
         file = audioFile
         current = track
         duration = track.duration > 0
@@ -421,11 +459,11 @@ final class AudioPlayer: ObservableObject {
         #if os(macOS)
         syncExclusiveRate(to: audioFile.processingFormat.sampleRate)
         #endif
-        prepareEngine(for: audioFile.processingFormat)
+        prepareGraph(for: audioFile.processingFormat)
         schedule(from: 0)
 
         if autoplay {
-            // `prepareEngine` can legitimately fail to get the engine running —
+            // `prepareGraph` can legitimately fail to get the engine running —
             // the session was taken, the route died. Claiming playback anyway is
             // what showed a "playing" track whose progress never moved.
             guard engine.isRunning else {
@@ -443,6 +481,21 @@ final class AudioPlayer: ObservableObject {
             #endif
         }
         nowPlaying?.update(for: self)
+    }
+
+    /// The unreadable-file path, kept exactly as it was: report the failure,
+    /// skip forward, or stop when the queue has nothing else to try.
+    private func failLoad(_ track: Track) {
+        current = track
+        duration = 0
+        isPlaying = false
+        loadFailStreak += 1
+        if queue.count > 1, loadFailStreak < queue.count {
+            next(userInitiated: false)
+        } else {
+            loadFailStreak = 0
+            stop()
+        }
     }
 
     #if os(iOS)
@@ -511,31 +564,44 @@ final class AudioPlayer: ObservableObject {
     }
     #endif
 
-    /// Sample rates differ between albums, so the mixer connection is rebuilt
-    /// whenever the incoming file's format changes.
-    private func prepareEngine(for format: AVAudioFormat) {
+    /// Keeps the session alive. Cheap and idempotent when it is already
+    /// active, which is the usual case; it matters after an interruption or a
+    /// route change deactivated it, where a silent engine would otherwise
+    /// report itself as playing.
+    nonisolated private func activateSession() {
         #if os(iOS)
-        // iOS runs its output at 48 kHz by default. Every 44.1 kHz file would
-        // then be resampled on the fly; asking the hardware to match the file
-        // avoids that conversion entirely. Bluetooth ignores the request and
-        // picks its own rate, which is expected.
+        try? AVAudioSession.sharedInstance().setActive(true)
+        #endif
+    }
+
+    /// Asks the hardware for the file's own sample rate.
+    ///
+    /// iOS runs its output at 48 kHz by default, so every 44.1 kHz file would be
+    /// resampled on the fly; matching the file avoids that conversion. The
+    /// request blocks while `mediaserverd` tears the device down, so it runs on
+    /// the load queue — and the engine is already stopped by the caller, because
+    /// reconfiguring the hardware under a running engine invalidates it.
+    nonisolated private func applySessionRate(_ format: AVAudioFormat) {
+        #if os(iOS)
         let session = AVAudioSession.sharedInstance()
-        // Re-activate before starting the engine. `load` reaches here straight
-        // from a shuffle tap, without going through `resume`, so it never
-        // re-activated the session the system had deactivated — the engine then
-        // started against a dead session: silence, while `isPlaying` said
-        // otherwise.
         try? session.setActive(true)
         if abs(session.sampleRate - format.sampleRate) > 1 {
-            // A rate switch tears the graph down. Take the engine down first so
-            // it happens on a stopped engine rather than on one that is already
-            // rendering — starting and then being invalidated is what produced
-            // a silent track that still called itself playing.
-            if engine.isRunning { engine.stop() }
             try? session.setPreferredSampleRate(format.sampleRate)
         }
         #endif
+    }
 
+    /// Session and graph in one go, for the rare repair paths that already run
+    /// on the main thread and simply want the chain back up.
+    private func prepareEngine(for format: AVAudioFormat) {
+        activateSession()
+        applySessionRate(format)
+        prepareGraph(for: format)
+    }
+
+    /// Sample rates differ between albums, so the mixer connection is rebuilt
+    /// whenever the incoming file's format changes.
+    private func prepareGraph(for format: AVAudioFormat) {
         if connectedFormat == nil || !format.isEqual(connectedFormat!) {
             engine.stop()
             // Two hops to rebuild now that the equalizer sits in the chain.
@@ -713,15 +779,27 @@ final class AudioPlayer: ObservableObject {
         }
         #endif
         node.stop()
+        // A load that is still opening its file must not start playing once it
+        // lands: bumping the generation makes the late `install` bail out.
+        generation += 1
         isPlaying = false
         currentTime = 0
         seekFrame = 0
         #if os(iOS)
         // Same reason as in pause(): a running engine reads as "playing" to
-        // the system. The next track re-schedules everything in prepareEngine.
+        // the system. The next track re-schedules everything in prepareGraph.
         engine.stop()
         #endif
         nowPlaying?.update(for: self)
+    }
+
+    /// The file behind `current` has been deleted (a bad Wi-Fi upload, say).
+    /// Let go of it, otherwise the player bar keeps offering a track that can
+    /// never play again.
+    func forgetFile(at url: URL) {
+        guard let current, current.url.standardizedFileURL == url.standardizedFileURL else { return }
+        stop()
+        self.current = nil
     }
 
     func seek(to seconds: Double) {
@@ -1515,3 +1593,25 @@ extension AudioPlayer {
     }
 }
 #endif
+
+// MARK: - A player reference that does not subscribe
+
+private struct PlayerHandleKey: EnvironmentKey {
+    static let defaultValue: AudioPlayer? = nil
+}
+
+extension EnvironmentValues {
+    /// The player, for calling into it — *without* subscribing the reader to its
+    /// published changes.
+    ///
+    /// `currentTime` is pushed by a 0.15 s timer while audio plays, so anything
+    /// holding the player as an `@EnvironmentObject` is rebuilt six or seven
+    /// times a second. A list row cannot afford that: its ⋯ menu is a UIKit
+    /// popup anchored to the row, and a row that rebuilds underneath it keeps
+    /// dropping the first tap or two. Rows take the player through this key and
+    /// leave the playhead-dependent bits to small leaf views.
+    var playerHandle: AudioPlayer? {
+        get { self[PlayerHandleKey.self] }
+        set { self[PlayerHandleKey.self] = newValue }
+    }
+}

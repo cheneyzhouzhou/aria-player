@@ -21,6 +21,8 @@ struct SettingsView: View {
     @ObservedObject private var menuBar = MenuBarSettings.shared
     #else
     @ObservedObject private var mediaLibrary = MediaLibraryAccess.shared
+    @StateObject private var wifiTransfer = WiFiTransferServer.shared
+    @State private var showingUploads = false
     #endif
     @Environment(\.colorScheme) private var scheme
 
@@ -45,6 +47,28 @@ struct SettingsView: View {
         }
         #endif
     }
+
+    #if os(iOS)
+    /// Starting the drop-box also registers its folder, so anything that lands
+    /// there is playable without another trip to Settings.
+    private func setWiFiTransfer(_ on: Bool) {
+        if on {
+            wifiTransfer.onBatchFinished = {
+                let store = library
+                Task { await store.scan() }
+            }
+            wifiTransfer.start()
+            Task {
+                if await library.addSource(wifiTransfer.folder) {
+                    await library.scan()
+                }
+            }
+        } else {
+            wifiTransfer.stop()
+            wifiTransfer.onBatchFinished = nil
+        }
+    }
+    #endif
 
     #if os(macOS)
     private func addMacFolder(at path: String) {
@@ -359,6 +383,84 @@ struct SettingsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                         #endif
 
+                        #if os(iOS)
+                        // Drag a folder across instead of plugging the phone in.
+                        // The page it serves is built for a desktop browser, so
+                        // everything here is address + reassurance.
+                        VStack(alignment: .leading, spacing: 7) {
+                            Toggle(isOn: Binding(
+                                get: { wifiTransfer.isRunning },
+                                set: { setWiFiTransfer($0) })) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(L("Wi-Fi transfer"))
+                                        .font(.body(13, .medium))
+                                        .foregroundStyle(p.onSurface)
+                                    if let address = wifiTransfer.urlString {
+                                        Text(address)
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundStyle(p.primary)
+                                            .textSelection(.enabled)
+                                    }
+                                }
+                            }
+                            .tint(p.primary)
+
+                            if wifiTransfer.isRunning {
+                                Text(L("On a computer on the same Wi-Fi, open that address in a browser and drop your music files onto the page. Keep Aria open while transferring."))
+                                    .font(.body(11))
+                                    .foregroundStyle(p.onSurfaceVariant)
+                                    .fixedSize(horizontal: false, vertical: true)
+
+                                if wifiTransfer.savedCount > 0, let last = wifiTransfer.lastName {
+                                    Text(String(format: L("%d received · last: %@"),
+                                                wifiTransfer.savedCount, last))
+                                        .font(.body(11))
+                                        .foregroundStyle(p.onSurfaceVariant)
+                                        .lineLimit(1)
+                                }
+                            }
+
+                            if let problem = wifiTransfer.errorMessage {
+                                Text(problem)
+                                    .font(.body(11))
+                                    .foregroundStyle(p.primary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            // Anything received can be thrown away again: a bad
+                            // upload has no other home in the app, since the
+                            // library never deletes files.
+                            if wifiTransfer.isRunning || wifiTransfer.storedCount > 0 {
+                                Button { showingUploads = true } label: {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "tray.full")
+                                            .font(.system(size: 12, weight: .semibold))
+                                            .foregroundStyle(p.onSurfaceVariant)
+                                        Text(L("Received files"))
+                                            .font(.body(12, .medium))
+                                            .foregroundStyle(p.onSurface)
+                                        Spacer(minLength: 8)
+                                        Text("\(wifiTransfer.storedCount)")
+                                            .font(.ticker(12))
+                                            .foregroundStyle(p.onSurfaceVariant)
+                                        Image(systemName: "chevron.right")
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundStyle(p.onSurfaceVariant)
+                                    }
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                        .onAppear { wifiTransfer.refreshStored() }
+                        .sheet(isPresented: $showingUploads) {
+                            WiFiUploadsView(palette: p)
+                                .environmentObject(library)
+                                .environmentObject(player)
+                        }
+                        #endif
+
                         // Which build is on this device: the file name and the
                         // bundle version are stamped from the same number.
                         Text(footer)
@@ -484,6 +586,7 @@ struct SettingsView: View {
                         }
                     }
                 }
+
             }
             .padding(.horizontal, contentInset)
             .padding(.bottom, playerClearance)

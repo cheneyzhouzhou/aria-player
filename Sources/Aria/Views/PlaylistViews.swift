@@ -11,6 +11,10 @@ struct PlaylistListView: View {
 
     @State private var newName = ""
     @State private var showingNew = false
+    /// The playlist being renamed, held here rather than in the card: an alert
+    /// presented from the card right after its context menu closes is dropped.
+    @State private var renaming: Playlist?
+    @State private var draftName = ""
 
     private var columns: [GridItem] {
         #if os(iOS)
@@ -61,7 +65,24 @@ struct PlaylistListView: View {
                 } else {
                     LazyVGrid(columns: columns, spacing: 26) {
                         ForEach(playlists) { list in
-                            PlaylistCard(playlist: list)
+                            PlaylistCard(playlist: list) { target in
+                                draftName = target.name
+                                // Let the menu finish closing first.
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { renaming = target }
+                            }
+                        }
+                    }
+                    .alert(L("Rename playlist"),
+                           isPresented: Binding(get: { renaming != nil },
+                                                set: { if !$0 { renaming = nil } })) {
+                        TextField(L("Name"), text: $draftName)
+                        Button(L("Cancel"), role: .cancel) { renaming = nil }
+                        Button(L("Save")) {
+                            let name = draftName.trimmingCharacters(in: .whitespaces)
+                            if let target = renaming, !name.isEmpty, name != target.name {
+                                playlistStore.rename(target, to: name)
+                            }
+                            renaming = nil
                         }
                     }
                 }
@@ -87,6 +108,8 @@ struct PlaylistListView: View {
 
 struct PlaylistCard: View {
     let playlist: Playlist
+    /// Asked the list to show the rename alert for this playlist.
+    var onRename: (Playlist) -> Void = { _ in }
 
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var playlistStore: PlaylistStore
@@ -146,8 +169,11 @@ struct PlaylistCard: View {
             Button(L("Play")) { player.playAll(tracks) }
             Button(L("Shuffle")) { player.playAll(tracks, shuffled: true) }
             Divider()
+            Button(L("Rename playlist")) { onRename(playlist) }
+            Divider()
             Button(L("Delete"), role: .destructive) { playlistStore.delete(playlist) }
         }
+
     }
 }
 
@@ -230,13 +256,19 @@ struct PlaylistDetailView: View {
 
                 LazyVStack(spacing: 4) {
                     ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
-                        TrackRow(track: track, context: tracks, trackNumber: index + 1)
+                        // One closure, two menus: the row's ⋯ button and its
+                        // long-press menu have to show the same actions.
+                        let removeFromPlaylist: () -> Void = {
+                            playlistStore.remove(track, from: playlist, root: library.rootPath)
+                        }
+
+                        TrackRow(track: track, context: tracks, trackNumber: index + 1,
+                                 onRemoveFromPlaylist: removeFromPlaylist)
                             .contextMenu {
                                 TrackMenu(track: track, context: tracks)
                                 Divider()
-                                Button(L("Remove from playlist"), role: .destructive) {
-                                    playlistStore.remove(track, from: playlist, root: library.rootPath)
-                                }
+                                Button(L("Remove from playlist"), role: .destructive,
+                                       action: removeFromPlaylist)
                             }
                     }
                 }

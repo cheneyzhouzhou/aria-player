@@ -90,7 +90,6 @@ enum L10n {
         "Add folder": "添加文件夹",
         "Add a folder": "添加文件夹",
         "Rescan": "重新扫描",
-        "Find something to play": "找点音乐来播放",
         "Scanning your music folders…": "正在扫描你的音乐文件夹…",
         "No matches for “X”": "没有与“X”匹配的结果",
         "No music files in your music folders yet. Add the folder they live in — On My iPhone, iCloud Drive, or anywhere the Files app can reach. Aria reads FLAC, ALAC, MP3, AAC, WAV or AIFF.": "你的音乐文件夹里还没有音乐文件。请把它们所在的文件夹添加进来——可以是“我的 iPhone”、iCloud 云盘，或“文件”App 能够访问的任何位置。Aria 支持读取 FLAC、ALAC、MP3、AAC、WAV 或 AIFF。",
@@ -128,6 +127,30 @@ enum L10n {
         "Unknown title": "未知曲目",
         "Unknown artist": "未知艺人",
         "Unknown album": "未知专辑",
+
+        // Settings — Wi-Fi transfer, plus the page it serves
+        "Wi-Fi transfer": "Wi-Fi 传输",
+        "On a computer on the same Wi-Fi, open that address in a browser and drop your music files onto the page. Keep Aria open while transferring.": "在同一 Wi-Fi 下的电脑上，用浏览器打开上方地址，把音乐文件拖进页面。传输时请让 Aria 保持在前台。",
+        "%d received · last: %@": "已接收 %d 个 · 最近：%@",
+        "Couldn’t start the server.": "无法启动传输服务。",
+        "Drop music files here — they land in Aria on this iPhone.": "把音乐文件拖到这里——它们会直接进入这台 iPhone 上的 Aria。",
+        "Choose files…": "选择文件…",
+        "or drag them onto this page": "或直接拖到本页面",
+        "FLAC, ALAC, WAV, AIFF, CAF, MP3, AAC — plus .lrc lyrics with the same name": "FLAC、ALAC、WAV、AIFF、CAF、MP3、AAC，以及同名的 .lrc 歌词",
+        "%d files in “Wi-Fi Uploads” · keep Aria open while transferring.": "「Wi-Fi 上传」中已有 %d 个文件 · 传输时请保持 Aria 在前台。",
+        "Waiting…": "等待中…",
+        "Done": "完成",
+        "Failed": "失败",
+        "Untitled": "未命名",
+        "This address is not the upload page. Use the address shown in Aria › Settings › Wi-Fi transfer.": "这不是上传页面。请使用 Aria › 设置 › Wi-Fi 传输 中显示的地址。",
+        "Received files": "已接收文件",
+        "No files yet": "还没有文件",
+        "Drop music files onto the Wi-Fi transfer page and they show up here.": "把音乐文件拖到 Wi-Fi 传输页面，它们就会出现在这里。",
+        "These files also live in Files › Aria › Wi-Fi Uploads, where they can be deleted the same way.": "这些文件也存放在「文件 › Aria › Wi-Fi Uploads」，同样可以在那里删除。",
+        "Delete “%@”?": "删除「%@」？",
+        "Lyrics": "歌词",
+        "The file is deleted from this iPhone. This can’t be undone.": "文件会从这台 iPhone 上删除，此操作不可撤销。",
+
 
         // Settings — output
         "Output": "输出",

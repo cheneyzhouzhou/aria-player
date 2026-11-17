@@ -43,12 +43,14 @@ final class Navigator: ObservableObject {
 }
 
 enum RailDestination: String, CaseIterable {
-    case library, search, settings
+    /// Three destinations: the library, the playlists page that used to live
+    /// inside it as a tab, and settings.
+    case library, playlists, settings
 
     var title: String {
         switch self {
         case .library: return L("Library")
-        case .search: return L("Search")
+        case .playlists: return L("Playlists")
         case .settings: return L("Settings")
         }
     }
@@ -56,21 +58,20 @@ enum RailDestination: String, CaseIterable {
     var icon: String {
         switch self {
         case .library: return "square.stack.fill"
-        case .search: return "magnifyingglass"
+        case .playlists: return "music.note.list"
         case .settings: return "gearshape.fill"
         }
     }
 }
 
 enum LibraryTab: String, CaseIterable {
-    case songs, albums, artists, playlists, recent
+    case songs, albums, artists, recent
 
     var title: String {
         switch self {
         case .songs: return L("Songs")
         case .albums: return L("Albums")
         case .artists: return L("Artists")
-        case .playlists: return L("Playlists")
         case .recent: return L("Recent")
         }
     }
@@ -206,21 +207,24 @@ struct RootView: View {
 
     private var mainColumn: some View {
         VStack(spacing: 0) {
-            if library.tracks.isEmpty && !library.isScanning {
-                EmptyLibraryView(palette: active)
-            } else if let route = nav.route {
+            if let route = nav.route {
                 detail(route)
+            } else if destination == .library, library.tracks.isEmpty, !library.isScanning {
+                // The empty state belongs to the library, not to the whole
+                // window: Playlists and Settings stay reachable with no music
+                // yet, which is how the phone already behaves.
+                EmptyLibraryView(palette: active)
             } else {
                 switch destination {
                 case .library: libraryScreen
-                case .search: SearchScreen(query: $search, palette: active)
+                case .playlists: playlistsScreen
                 case .settings: SettingsView(palette: active, drawsBackdrop: false)
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // A single rounded glass container behind every tab (library, search,
-        // settings); its sections are separate glass cards on top.
+        // A single rounded glass container behind every page (library,
+        // playlists, settings); its sections are separate glass cards on top.
         .background {
             if AppearanceSettings.shared.usesGlass {
                 GlassSurface(shape: RoundedRectangle(cornerRadius: 22, style: .continuous),
@@ -288,12 +292,25 @@ struct RootView: View {
                     AlbumGridView(albums: filteredAlbums)
                 case .artists:
                     ArtistListView(artists: filteredArtists)
-                case .playlists:
-                    PlaylistListView(playlists: playlistStore.playlists)
                 case .recent:
                     SongListView(tracks: filtered(library.tracks).sorted { $0.dateAdded > $1.dateAdded })
                 }
             }
+        }
+    }
+
+    /// Standalone playlists page — the exact list the library used to carry as
+    /// a tab, now one click closer on the rail.
+    private var playlistsScreen: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(L("Playlists"))
+                .font(.display(40, .semibold))
+                .foregroundStyle(active.onSurface)
+                .padding(.horizontal, 30)
+                .padding(.top, 40)
+                .padding(.bottom, 12)
+
+            PlaylistListView(playlists: playlistStore.playlists)
         }
     }
 
@@ -388,56 +405,4 @@ struct EmptyLibraryView: View {
     }
 }
 
-// MARK: - Search screen
-
-struct SearchScreen: View {
-    @Binding var query: String
-    let palette: M3Palette
-
-    @EnvironmentObject var library: LibraryStore
-    @EnvironmentObject var player: AudioPlayer
-
-    private var results: [Track] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return [] }
-        return library.tracks.filter {
-            $0.title.lowercased().contains(q)
-                || $0.artist.lowercased().contains(q)
-                || $0.album.lowercased().contains(q)
-        }
-        .sorted { $0.title.lowercased() < $1.title.lowercased() }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(L("Search"))
-                .font(.display(40, .semibold))
-                .foregroundStyle(palette.onSurface)
-                .padding(.horizontal, 30)
-                .padding(.top, 40)
-                .padding(.bottom, 18)
-
-            SearchPill(text: $query, palette: palette, width: nil)
-                .padding(.horizontal, 30)
-                .padding(.bottom, 18)
-
-            if query.isEmpty {
-                Spacer()
-                Text(L("Find something to play"))
-                    .font(.body(14))
-                    .foregroundStyle(palette.onSurfaceVariant)
-                    .frame(maxWidth: .infinity)
-                Spacer()
-            } else if results.isEmpty {
-                Spacer()
-                Text(Lmatch(query))
-                    .font(.body(14))
-                    .foregroundStyle(palette.onSurfaceVariant)
-                    .frame(maxWidth: .infinity)
-                Spacer()
-            } else {
-                SongListView(tracks: results)
-            }
-        }
-    }
-}
+// MARK: - Playlists page

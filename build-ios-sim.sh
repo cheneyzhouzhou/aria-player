@@ -50,6 +50,7 @@ cat > "$APP/Info.plist" <<'PLIST'
     <!-- Same key as Resources/iOS-Info.plist: touching the media library
          without it terminates the app, even when the query returns nothing. -->
     <key>NSAppleMusicUsageDescription</key><string>Aria reads your Music app library only to play DRM-free songs you already own. It never copies or uploads your music.</string>
+    <key>NSLocalNetworkUsageDescription</key><string>Aria uses the local network only so a computer on the same Wi-Fi can send music files to this iPhone.</string>
 </dict>
 </plist>
 PLIST

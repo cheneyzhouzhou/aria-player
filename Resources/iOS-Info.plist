@@ -40,6 +40,11 @@
     <key>NSAppleMusicUsageDescription</key>
     <string>Aria reads your Music app library only to play DRM-free songs you already own. It never copies or uploads your music.</string>
 
+    <!-- Wi-Fi transfer listens on the local network; iOS 14+ requires a reason
+         before the app may talk to devices on the same Wi-Fi. -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Aria uses the local network only so a computer on the same Wi-Fi can send music files to this iPhone.</string>
+
     <key>UILaunchScreen</key>
     <dict/>
     <key>UIApplicationSupportsIndirectInputEvents</key>

@@ -14,11 +14,16 @@ struct PhoneRootView: View {
     @ObservedObject private var appearance = AppearanceSettings.shared
     @State private var destination: RailDestination = .library
     @State private var tab: LibraryTab = .albums
-    /// One string for both fields, exactly as on the desktop: the library
-    /// header and the Search tab show the same text, so the page that is
-    /// filtered always displays — and can clear — the term doing it.
+    /// The library's own search term, exactly as on the desktop. It lives on
+    /// the page it filters, so whatever is narrowing the list is visible there
+    /// and can be cleared there.
     @State private var search = ""
     @State private var showNowPlaying = false
+    @Environment(\.scenePhase) private var scenePhase
+    /// Set when the app goes away, so the return trip re-reads the folders:
+    /// files can be deleted in the Files app or dropped in from Finder while
+    /// Aria is in the background, and nothing else would notice.
+    @State private var needsRescanOnReturn = false
     /// Last resolved colour for the mini player — see `refreshNowPlayingSeed`.
     @State private var nowPlayingSeed: PaletteSeed?
     /// How far the page has been dragged sideways. It exists so the content
@@ -93,7 +98,10 @@ struct PhoneRootView: View {
                 // vertically as usual; `backSwipe` only claims the drag once it
                 // is clearly horizontal and rightward.
                 .offset(x: nav.route != nil ? backSwipeOffset : 0)
-                .simultaneousGesture(backSwipe)
+                // Only route events to it when a detail page is open: on the
+                // library page it did nothing but compete with the rows for the
+                // same touches — the ⋯ menu was the casualty.
+                .simultaneousGesture(backSwipe, including: nav.route == nil ? .none : .all)
 
             VStack(spacing: 10) {
                 if player.current != nil {
@@ -118,6 +126,16 @@ struct PhoneRootView: View {
         .onChange(of: palettes.revision) { _, _ in refreshNowPlayingSeed() }
         .onChange(of: destination) { _, _ in nav.reset() }
         .onChange(of: tab) { _, _ in nav.reset() }
+
+
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background {
+                needsRescanOnReturn = true
+            } else if phase == .active, needsRescanOnReturn {
+                needsRescanOnReturn = false
+                Task { await library.scan() }
+            }
+        }
         .fullScreenCover(isPresented: $showNowPlaying) {
             PhoneNowPlayingView(palette: nowPlayingPalette) { showNowPlaying = false }
                 .environmentObject(player)
@@ -155,7 +173,8 @@ struct PhoneRootView: View {
             switch destination {
             case .library:
                 // The empty state belongs to the library, not to the whole app:
-                // Settings and Search have to stay reachable with no music yet.
+                // Playlists and Settings have to stay reachable with no music
+                // yet.
                 if library.tracks.isEmpty && library.isScanning {
                     scanningScreen
                 } else if library.tracks.isEmpty {
@@ -163,7 +182,7 @@ struct PhoneRootView: View {
                 } else {
                     libraryScreen
                 }
-            case .search: SearchScreen(query: $search, palette: active)
+            case .playlists: playlistsScreen
             case .settings: SettingsView(palette: active, drawsBackdrop: false)
             }
         }
@@ -184,11 +203,9 @@ struct PhoneRootView: View {
 
     private var libraryScreen: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // The library now carries its own small search field, the way the
-            // desktop layout does. It shares one string with the Search tab, so
-            // whatever is filtering this page is visible here and can be
-            // cleared here — before, the term lived only on the other tab and
-            // the library just looked like it had lost music.
+            // The library carries its own small search field, the way the
+            // desktop layout does: the term that narrows the list is visible on
+            // the same page and can be cleared right there.
             HStack(alignment: .center, spacing: 12) {
                 Text(L("Library"))
                     .font(.display(34, .semibold))
@@ -234,14 +251,31 @@ struct PhoneRootView: View {
                     AlbumGridView(albums: filteredAlbums)
                 case .artists:
                     ArtistListView(artists: filteredArtists)
-                case .playlists:
-                    PlaylistListView(playlists: playlistStore.playlists)
                 case .recent:
                     SongListView(tracks: filtered(library.tracks).sorted { $0.dateAdded > $1.dateAdded })
                 }
             }
             .offset(x: swipeOffset)
+            // Back on: the row menu is a system action sheet now, so it no
+            // longer shares a gesture arena with this drag — the two were only
+            // ever in conflict while the popup was a UIKit menu anchored to a
+            // row that the swipe recogniser also covered.
             .simultaneousGesture(tabSwipe)
+        }
+    }
+
+    /// Standalone playlists page: the list the library used to hide behind its
+    /// fifth chip, now its own destination in the bottom bar.
+    private var playlistsScreen: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(L("Playlists"))
+                .font(.display(34, .semibold))
+                .foregroundStyle(active.onSurface)
+                .padding(.top, AppearanceSettings.shared.usesGlass ? 22 : 0)
+                .padding(.horizontal, 22)
+                .padding(.bottom, 8)
+
+            PlaylistListView(playlists: playlistStore.playlists)
         }
     }
 
