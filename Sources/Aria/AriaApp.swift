@@ -15,6 +15,7 @@ struct AriaApp: App {
     @StateObject private var playlists = PlaylistStore()
     @StateObject private var lang = LanguageSettings.shared
     @StateObject private var appearance = AppearanceSettings.shared
+    @StateObject private var dialogs = DialogCenter()
     private let nowPlaying = NowPlayingController()
     /// The library scan and system wiring run once per app launch; later runs
     /// of the bootstrap task skip the scan.
@@ -26,6 +27,7 @@ struct AriaApp: App {
     private var root: some View {
         #if os(iOS)
         PhoneRootView()
+            .environmentObject(dialogs)
             .environmentObject(library)
             .environmentObject(player)
             .environment(\.playerHandle, player)
@@ -39,6 +41,7 @@ struct AriaApp: App {
             }
         #else
         RootView()
+            .environmentObject(dialogs)
             .environmentObject(library)
             .environmentObject(player)
             .environment(\.playerHandle, player)

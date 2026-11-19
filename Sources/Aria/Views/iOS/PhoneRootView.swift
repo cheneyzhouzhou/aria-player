@@ -68,6 +68,8 @@ struct PhoneRootView: View {
         }
     }
 
+    @EnvironmentObject private var dialogs: DialogCenter
+
     var body: some View {
         ZStack(alignment: .bottom) {
             AppBackground(active).ignoresSafeArea()
@@ -140,6 +142,11 @@ struct PhoneRootView: View {
             PhoneNowPlayingView(palette: nowPlayingPalette) { showNowPlaying = false }
                 .environmentObject(player)
         }
+        // Above the bars as well as the page: a question has to dim the whole
+        // window, or it reads as a patch of black and the bar stays live.
+        // The host sits outside the page's subtree, so the active palette has
+        // to be handed to it explicitly.
+        .overlay { DialogHost(center: dialogs).environment(\.palette, active) }
     }
 
     @ViewBuilder
@@ -847,10 +854,6 @@ struct PhoneNowPlayingView: View {
                        fill: buttonFill,
                        foreground: onStage ? Color.white.opacity(0.9) : palette.onSurface,
                        action: onDismiss)
-            Spacer()
-            Text(L("Now Playing"))
-                .font(.label(12.5, .semibold))
-                .foregroundStyle(secondaryColor)
             Spacer()
             IconButton(system: "slider.vertical.3", size: 40, glyph: 15,
                        fill: player.eqEnabled ? coverAccent : buttonFill,

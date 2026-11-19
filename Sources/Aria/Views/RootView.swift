@@ -84,6 +84,7 @@ struct RootView: View {
     @EnvironmentObject var player: AudioPlayer
     @EnvironmentObject var palettes: PaletteStore
     @EnvironmentObject var playlistStore: PlaylistStore
+    @EnvironmentObject private var dialogs: DialogCenter
     @StateObject private var nav = Navigator()
     @Environment(\.colorScheme) private var scheme
 
@@ -129,6 +130,10 @@ struct RootView: View {
             // keeps its flush, single-column layout.
             .padding(AppearanceSettings.shared.usesGlass ? 16 : 0)
             .ignoresSafeArea(edges: .top)
+
+            DialogHost(center: dialogs)
+                .environment(\.palette, active)
+                .zIndex(20)
 
             if player.current != nil {
                 // The floating bar sits on the themed window, so in Morandi it

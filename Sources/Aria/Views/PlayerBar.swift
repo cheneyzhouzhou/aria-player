@@ -175,10 +175,6 @@ struct NowPlayingView: View {
                        fill: palette.surfaceContainer, foreground: palette.onSurface,
                        action: onDismiss)
             Spacer()
-            Text(L("Now Playing"))
-                .font(.label(13, .semibold))
-                .foregroundStyle(palette.onSurfaceVariant)
-            Spacer()
             IconButton(system: "list.bullet", size: 40, glyph: 15,
                        fill: showQueue ? palette.primary : palette.surfaceContainer,
                        foreground: showQueue ? palette.onPrimary : palette.onSurface) {

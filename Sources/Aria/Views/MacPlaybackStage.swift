@@ -279,25 +279,37 @@ struct MacPlaybackStage: View {
         // every animation frame, which re-wrapped every visible lyric line —
         // that reflow was the stutter when opening/closing the queue.
         HStack(alignment: .top, spacing: 62) {
-            leftColumn.frame(width: 330)
+            // With lyrics hidden the cover and its text are the whole page, so
+            // they move to the middle; the two balancing spacers are what slide
+            // them there and back rather than swapping in a different layout.
+            if !showLyrics {
+                Spacer(minLength: 0)
+            }
+
+            // The column fills the row's height and centres its content in it,
+            // so the cover sits level with the middle of the lyrics beside it
+            // instead of hanging from the top edge.
+            leftColumn
+                .frame(width: 330)
+                .frame(maxHeight: .infinity, alignment: .center)
 
             if showLyrics {
                 StageLyricsView(track: player.current, currentTime: player.currentTime)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.opacity)
             } else {
-                // A bare Spacer would let the row collapse to the cover's own
-                // height; the outer `maxHeight: .infinity` frame then centres
-                // that shorter row, so the cover (and the queue overlay, which
-                // is sized by this row) jumped whenever lyrics were hidden.
-                // An empty flexible view keeps the slot at full size.
-                Color.clear
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .accessibilityHidden(true)
+                // A matching spacer on this side too: with one on the left, the
+                // pair splits the free width evenly and the cover lands in the
+                // middle of the page instead of a quarter of the way across.
+                Spacer(minLength: 0)
             }
         }
         // Pin the row to the top-left of the slot so its height is never
-        // re-centred while the lyric column comes and goes.
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // re-centred while the lyric column comes and goes; with the lyrics
+        // away the alignment flips to centre and the row travels there.
+        .frame(maxWidth: .infinity, maxHeight: .infinity,
+               alignment: showLyrics ? .leading : .center)
+        .animation(.spring(response: 0.52, dampingFraction: 0.88), value: showLyrics)
         .padding(.leading, 68)
         .padding(.trailing, 46)
         .padding(.top, 12)
@@ -327,7 +339,7 @@ struct MacPlaybackStage: View {
                     .shadow(color: .black.opacity(0.38), radius: 30, y: 14)
 
                 Text(track.title)
-                    .font(.display(24, .semibold))
+                    .font(.display(25, .semibold))
                     .foregroundStyle(.white)
                     .lineLimit(2)
                     .padding(.top, 26)
@@ -343,7 +355,7 @@ struct MacPlaybackStage: View {
                     Label(track.artist, systemImage: "music.mic")
                     Label(track.album, systemImage: "opticaldisc")
                 }
-                .font(.system(size: 12))
+                .font(.system(size: 13))
                 .foregroundStyle(.white.opacity(0.62))
                 .padding(.top, 16)
             }
@@ -352,7 +364,7 @@ struct MacPlaybackStage: View {
 
     private func badge(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 9.5, weight: .medium))
+            .font(.system(size: 10.5, weight: .medium))
             .foregroundStyle(.white.opacity(0.75))
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
@@ -373,10 +385,6 @@ struct MacPlaybackStage: View {
                 chrome.stop()
                 onDismiss()
             }
-            Spacer()
-            Text(L("Now Playing"))
-                .font(.label(12.5, .semibold))
-                .foregroundStyle(.white.opacity(0.7))
             Spacer()
             // The single lyrics switch: the bottom bar's copy is gone.
             stageIcon("text.quote", active: showLyrics,
@@ -597,13 +605,9 @@ struct StageLyricsView: View {
                 let active = lyrics.index(at: currentTime)
                 ScrollViewReader { proxy in
                     ScrollView(.vertical, showsIndicators: false) {
-                        LazyVStack(alignment: .leading, spacing: 26) {
+                        LazyVStack(alignment: .center, spacing: 26) {
                             ForEach(Array(lyrics.lines.enumerated()), id: \.element.id) { index, line in
-                                Text(line.text.isEmpty ? "♪" : line.text)
-                                    .font(.system(size: index == active ? 27 : 23,
-                                                  weight: index == active ? .semibold : .regular))
-                                    .foregroundStyle(.white.opacity(index == active ? 0.98 : 0.42))
-                                    .fixedSize(horizontal: false, vertical: true)
+                                lyricLine(index: index, line: line, active: active, in: lyrics)
                                     .id(line.id)
                             }
                             // Room to centre the last line.
@@ -638,9 +642,71 @@ struct StageLyricsView: View {
         .task(id: track?.id) { await load() }
     }
 
+
+    /// One line, drawn the way the reference player draws it: the current line
+    /// grows with a springy overshoot and is filled left-to-right by a soft
+    /// masked edge as it is sung; the rest sit quiet at full sharpness. No
+    /// blur — the reference keeps every row crisp and separates them by weight
+    /// and opacity only.
+    @ViewBuilder
+    private func lyricLine(index: Int, line: LyricLine, active: Int?, in lyrics: Lyrics) -> some View {
+        let isActive = index == active
+        let text = line.text.isEmpty ? "♪" : line.text
+        let wipe = fillProgress(index: index, active: active, in: lyrics)
+
+        // The font has to sit on each Text, not on the ZStack: the mask is laid
+        // out in the masked view's own coordinate space, and a font applied
+        // outside would leave the mask measuring the default type size.
+        let font = Font.system(size: 27, weight: isActive ? .semibold : .regular)
+
+        ZStack {
+            // One type size for every row, like the reference: the current line
+            // is set apart by the sweep and a small scale, not by a bigger font.
+            Text(text)
+                .font(font)
+                .foregroundStyle(.white.opacity(0.22))
+            if isActive {
+                Text(text)
+                    .font(font)
+                    .foregroundStyle(.white.opacity(0.98))
+                    .mask {
+                        LinearGradient(stops: [
+                            .init(color: .white, location: max(0, wipe - 0.10)),
+                            .init(color: .white.opacity(0.0), location: min(1, wipe))
+                        ], startPoint: .leading, endPoint: .trailing)
+                    }
+            }
+        }
+        .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .scaleEffect(isActive ? 1.085 : 1)
+        // The song hands us a new time every 0.15 s; easing each step linearly
+        // over the same interval keeps the fill moving instead of stepping.
+        .animation(.linear(duration: 0.15), value: wipe)
+        // Overshoot on purpose: the line should land with a little bounce.
+        .animation(.spring(response: 0.42, dampingFraction: 0.62), value: active)
+    }
+
+    /// How much of the line has been sung, 0...1. LRC only carries line times,
+    /// so the run to the next line is spread evenly across the text.
+    private func fillProgress(index: Int, active: Int?, in lyrics: Lyrics) -> Double {
+        guard let active else { return 0 }
+        if index < active { return 1 }
+        guard index == active else { return 0 }
+        let start = lyrics.lines[index].time
+        let end = index + 1 < lyrics.lines.count
+            ? lyrics.lines[index + 1].time
+            : start + 4
+        guard end > start else { return 1 }
+        return min(1, max(0, (currentTime - start) / (end - start)))
+    }
+
     private func scroll(_ proxy: ScrollViewProxy, to index: Int?, in lyrics: Lyrics) {
         guard let index, lyrics.lines.indices.contains(index) else { return }
-        withAnimation(.easeInOut(duration: 0.55)) {
+        // Spring, matching the reference player's scroll physics
+        // (mass 1 / stiffness 100 / damping 20) rather than a fixed ease.
+        withAnimation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20)) {
             proxy.scrollTo(lyrics.lines[index].id, anchor: .center)
         }
     }

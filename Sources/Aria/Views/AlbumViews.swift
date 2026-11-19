@@ -33,7 +33,9 @@ struct AlbumGridView: View {
 struct AlbumCard: View {
     let album: Album
 
-    @EnvironmentObject var player: AudioPlayer
+    /// Read-only calls (`playAll`) only — subscribing would rebuild the card on
+    /// every playhead tick and cost the context menu its taps.
+    @Environment(\.playerHandle) private var player
     @EnvironmentObject var nav: Navigator
     @Environment(\.palette) private var palette
     @State private var isHovering = false
@@ -47,7 +49,7 @@ struct AlbumCard: View {
 
                 // Material's small FAB, revealed on hover.
                 Button {
-                    player.playAll(album.tracks)
+                    player?.playAll(album.tracks)
                 } label: {
                     Image(systemName: "play.fill")
                         .font(.system(size: 15, weight: .bold))
@@ -90,7 +92,9 @@ struct AlbumCard: View {
 struct AlbumDetailView: View {
     let album: Album
 
-    @EnvironmentObject var player: AudioPlayer
+    /// Read-only calls (`playAll`) only — subscribing would rebuild the card on
+    /// every playhead tick and cost the context menu its taps.
+    @Environment(\.playerHandle) private var player
     @Environment(\.palette) private var palette
 
     var body: some View {
@@ -166,12 +170,12 @@ struct AlbumDetailView: View {
 
     private var actions: some View {
         HStack(spacing: 10) {
-            Button { player.playAll(album.tracks) } label: {
+            Button { player?.playAll(album.tracks) } label: {
                 Label(L("Play"), systemImage: "play.fill")
             }
             .buttonStyle(PillButtonStyle(kind: .filled, palette: palette))
 
-            Button { player.playAll(album.tracks, shuffled: true) } label: {
+            Button { player?.playAll(album.tracks, shuffled: true) } label: {
                 Label(L("Shuffle"), systemImage: "shuffle")
             }
             .buttonStyle(PillButtonStyle(kind: .tonal, palette: palette))
@@ -247,7 +251,9 @@ private struct ArtistRow: View {
 struct ArtistDetailView: View {
     let artist: Artist
 
-    @EnvironmentObject var player: AudioPlayer
+    /// Read-only calls (`playAll`) only — subscribing would rebuild the card on
+    /// every playhead tick and cost the context menu its taps.
+    @Environment(\.playerHandle) private var player
     @Environment(\.palette) private var palette
 
     /// A 393pt phone fits two columns only below ~150pt per tile.
@@ -303,12 +309,12 @@ struct ArtistDetailView: View {
 
     private var artistActions: some View {
         HStack(spacing: 10) {
-            Button { player.playAll(allTracks) } label: {
+            Button { player?.playAll(allTracks) } label: {
                 Label(L("Play"), systemImage: "play.fill")
             }
             .buttonStyle(PillButtonStyle(kind: .filled, palette: palette))
 
-            Button { player.playAll(allTracks, shuffled: true) } label: {
+            Button { player?.playAll(allTracks, shuffled: true) } label: {
                 Label(L("Shuffle"), systemImage: "shuffle")
             }
             .buttonStyle(PillButtonStyle(kind: .tonal, palette: palette))

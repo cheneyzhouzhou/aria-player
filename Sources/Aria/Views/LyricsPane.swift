@@ -64,15 +64,7 @@ struct LyricsPane: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(alignment: .center, spacing: 16) {
                         ForEach(Array(lyrics.lines.enumerated()), id: \.element.id) { index, line in
-                            Text(line.text.isEmpty ? "♪" : line.text)
-                                .font(.body(index == active ? 19 : 16,
-                                            index == active ? .semibold : .regular))
-                                .foregroundStyle(index == active
-                                                 ? primary
-                                                 : secondary.opacity(0.7))
-                                .multilineTextAlignment(.center)
-                                .frame(maxWidth: .infinity, alignment: .center)
-                                .animation(.easeOut(duration: 0.2), value: active)
+                            lyricLine(index: index, line: line, active: active, in: lyrics)
                                 .id(line.id)
                         }
                     }
@@ -108,9 +100,67 @@ struct LyricsPane: View {
         }
     }
 
+    /// One line, drawn the way the reference player draws it: the current line
+    /// grows with a springy overshoot and is filled left-to-right behind a soft
+    /// masked edge as it is sung. Every other line stays crisp — the reference
+    /// separates rows by weight and opacity, not by blurring them.
+    @ViewBuilder
+    private func lyricLine(index: Int, line: LyricLine, active: Int?, in lyrics: Lyrics) -> some View {
+        let isActive = index == active
+        let text = line.text.isEmpty ? "♪" : line.text
+        let wipe = fillProgress(index: index, active: active, in: lyrics)
+
+        // Font on each Text: the mask measures its own view, so a font applied
+        // outside would size the mask by the default type instead.
+        let font = Font.body(18, isActive ? .semibold : .regular)
+
+        ZStack {
+            // Every row shares one size and a low base alpha; the sweep is what
+            // marks the current line, exactly as the reference renderer does.
+            Text(text)
+                .font(font)
+                .foregroundStyle(isActive ? primary.opacity(0.24) : secondary.opacity(0.5))
+            if isActive {
+                Text(text)
+                    .font(font)
+                    .foregroundStyle(primary)
+                    .mask {
+                        LinearGradient(stops: [
+                            .init(color: .white, location: max(0, wipe - 0.10)),
+                            .init(color: .white.opacity(0), location: min(1, wipe))
+                        ], startPoint: .leading, endPoint: .trailing)
+                    }
+            }
+        }
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .scaleEffect(isActive ? 1.085 : 1)
+        // The playhead arrives every 0.15 s; easing each step over that same
+        // interval keeps the fill sliding instead of jumping.
+        .animation(.linear(duration: 0.15), value: wipe)
+        // Overshoot on purpose: the line should land with a small bounce.
+        .animation(.spring(response: 0.42, dampingFraction: 0.62), value: active)
+    }
+
+    /// How much of the line has been sung, 0...1. LRC only carries line times,
+    /// so the run up to the next line is spread evenly across the text.
+    private func fillProgress(index: Int, active: Int?, in lyrics: Lyrics) -> Double {
+        guard let active else { return 0 }
+        if index < active { return 1 }
+        guard index == active else { return 0 }
+        let start = lyrics.lines[index].time
+        let end = index + 1 < lyrics.lines.count
+            ? lyrics.lines[index + 1].time
+            : start + 4
+        guard end > start else { return 1 }
+        return min(1, max(0, (currentTime - start) / (end - start)))
+    }
+
     private func scroll(_ proxy: ScrollViewProxy, to index: Int?, in lyrics: Lyrics) {
         guard let index, lyrics.lines.indices.contains(index) else { return }
-        withAnimation(.easeInOut(duration: 0.35)) {
+        // A spring rather than a fixed ease: lines catch up and settle, the way
+        // the reference player's scroll does (mass 1 / stiffness 100 / damping 20).
+        withAnimation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20)) {
             proxy.scrollTo(lyrics.lines[index].id, anchor: .center)
         }
     }

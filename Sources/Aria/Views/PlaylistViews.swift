@@ -7,6 +7,7 @@ struct PlaylistListView: View {
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var playlistStore: PlaylistStore
     @EnvironmentObject var nav: Navigator
+    @EnvironmentObject private var dialogs: DialogCenter
     @Environment(\.palette) private var palette
 
     @State private var newName = ""
@@ -15,6 +16,7 @@ struct PlaylistListView: View {
     /// presented from the card right after its context menu closes is dropped.
     @State private var renaming: Playlist?
     @State private var draftName = ""
+
 
     private var columns: [GridItem] {
         #if os(iOS)
@@ -38,16 +40,32 @@ struct PlaylistListView: View {
                         padding: EdgeInsets(top: 9, leading: 18, bottom: 9, trailing: 18)))
 
                     Button {
-                        let added = playlistStore.importFolders(from: library.tracks, root: library.rootPath)
-                        if added == 0 { /* nothing new to add */ }
+                        // Always asks which folder, even when the library only
+                        // holds one: the step makes the source explicit, and a
+                        // button that sometimes imports and sometimes asks was
+                        // indistinguishable from a dead button.
+                        if library.sources.isEmpty {
+                            dialogs.showNote(L("No library folder yet."))
+                        } else {
+                            dialogs.showsImportPicker = true
+                        }
                     } label: {
                         Label(L("Import folders"), systemImage: "folder.badge.plus")
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(PillButtonStyle(
-                        kind: .text, palette: palette,
-                        padding: EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 12)))
+                        kind: .tonal, palette: palette,
+                        padding: EdgeInsets(top: 9, leading: 16, bottom: 9, trailing: 16)))
 
                     Spacer()
+                }
+
+                if let note = dialogs.note {
+                    Text(note)
+                        .font(.body(11))
+                        .foregroundStyle(palette.onSurfaceVariant)
+                        .transition(.opacity)
+                        .padding(.top, -6)
                 }
 
                 if playlists.isEmpty {
@@ -65,11 +83,22 @@ struct PlaylistListView: View {
                 } else {
                     LazyVGrid(columns: columns, spacing: 26) {
                         ForEach(playlists) { list in
-                            PlaylistCard(playlist: list) { target in
+                            PlaylistCard(playlist: list, onRename: { target in
                                 draftName = target.name
                                 // Let the menu finish closing first.
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { renaming = target }
-                            }
+                            }, onDelete: { target in
+                                // A playlist holds hand-picked tracks, so the
+                                // delete asks once before it goes.
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                                    dialogs.confirm(
+                                        title: L("Delete playlist"),
+                                        message: L("“%@” will be deleted. This can’t be undone.")
+                                            .replacingOccurrences(of: "%@", with: target.name),
+                                        confirmTitle: L("Delete")
+                                    ) { playlistStore.delete(target) }
+                                }
+                            })
                         }
                     }
                     .alert(L("Rename playlist"),
@@ -90,6 +119,7 @@ struct PlaylistListView: View {
             .padding(.horizontal, screenInset)
             .padding(.top, 4)
             .padding(.bottom, playerClearance)
+
         }
         .scrollContentBackground(.hidden)
         .alert(L("New playlist"), isPresented: $showingNew) {
@@ -110,16 +140,27 @@ struct PlaylistCard: View {
     let playlist: Playlist
     /// Asked the list to show the rename alert for this playlist.
     var onRename: (Playlist) -> Void = { _ in }
+    /// Asked the list to confirm deleting this playlist.
+    var onDelete: (Playlist) -> Void = { _ in }
 
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var playlistStore: PlaylistStore
-    @EnvironmentObject var player: AudioPlayer
+    /// Not `@EnvironmentObject`: the card only ever calls `playAll`, and
+    /// observing the player would rebuild it on every playhead tick — the
+    /// context menu anchored to it then drops item taps.
+    @Environment(\.playerHandle) private var player
     @EnvironmentObject var nav: Navigator
     @Environment(\.palette) private var palette
     @State private var isHovering = false
 
     private var tracks: [Track] {
         playlistStore.tracks(in: playlist, library: library.tracks, root: library.rootPath)
+    }
+
+    /// Runs a context-menu action on the next runloop turn, so the menu is gone
+    /// before the card's data changes.
+    private func runLater(_ work: @escaping () -> Void) {
+        DispatchQueue.main.async(execute: work)
     }
 
     var body: some View {
@@ -130,7 +171,7 @@ struct PlaylistCard: View {
 
                 if !tracks.isEmpty {
                     Button {
-                        player.playAll(tracks)
+                        player?.playAll(tracks)
                     } label: {
                         Image(systemName: "play.fill")
                             .font(.system(size: 15, weight: .bold))
@@ -166,12 +207,15 @@ struct PlaylistCard: View {
         .onHover { isHovering = $0 }
         .animation(.snappy(duration: 0.22), value: isHovering)
         .contextMenu {
-            Button(L("Play")) { player.playAll(tracks) }
-            Button(L("Shuffle")) { player.playAll(tracks, shuffled: true) }
+            // Each item lets the menu close first: running the work inline keeps
+            // the popup on screen while the row changes underneath it, and the
+            // next tap lands nowhere.
+            Button(L("Play")) { runLater { player?.playAll(tracks) } }
+            Button(L("Shuffle")) { runLater { player?.playAll(tracks, shuffled: true) } }
             Divider()
             Button(L("Rename playlist")) { onRename(playlist) }
             Divider()
-            Button(L("Delete"), role: .destructive) { playlistStore.delete(playlist) }
+            Button(L("Delete"), role: .destructive) { onDelete(playlist) }
         }
 
     }
@@ -238,7 +282,8 @@ struct PlaylistDetailView: View {
 
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var playlistStore: PlaylistStore
-    @EnvironmentObject var player: AudioPlayer
+    /// Same reason as the card: only `playAll` and `shuffle` are needed here.
+    @Environment(\.playerHandle) private var player
     @EnvironmentObject var nav: Navigator
     @Environment(\.palette) private var palette
 
@@ -247,6 +292,12 @@ struct PlaylistDetailView: View {
 
     private var tracks: [Track] {
         playlistStore.tracks(in: playlist, library: library.tracks, root: library.rootPath)
+    }
+
+    /// Runs a context-menu action on the next runloop turn, so the menu is gone
+    /// before the card's data changes.
+    private func runLater(_ work: @escaping () -> Void) {
+        DispatchQueue.main.async(execute: work)
     }
 
     var body: some View {
@@ -334,12 +385,12 @@ struct PlaylistDetailView: View {
 
     private var actions: some View {
         HStack(spacing: 10) {
-            Button { player.playAll(tracks) } label: {
+            Button { player?.playAll(tracks) } label: {
                 Label(L("Play"), systemImage: "play.fill")
             }
             .buttonStyle(PillButtonStyle(kind: .filled, palette: palette))
 
-            Button { player.playAll(tracks, shuffled: true) } label: {
+            Button { player?.playAll(tracks, shuffled: true) } label: {
                 Label(L("Shuffle"), systemImage: "shuffle")
             }
             .buttonStyle(PillButtonStyle(kind: .tonal, palette: palette))

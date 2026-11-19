@@ -582,10 +582,14 @@ struct GlassAurora: View {
         let blob = 0.40     // blob strength
         let veil = 1.25     // light-mode white wash
         #else
-        let spread = 1.0
-        let sat = 1.0
-        let blob = 1.0
-        let veil = 1.0
+        // The phone has a portrait canvas where the blobs cover a much larger
+        // share of the screen than on a desktop window, so the same hue travel
+        // reads far busier: two saturated patches filled half the page. Kept a
+        // little looser than the Mac, well short of the old full spread.
+        let spread = 0.42
+        let sat = 0.62
+        let blob = 0.62
+        let veil = 1.05
         #endif
 
         let base1 = Color(hue: wrap(hue - 0.06 * spread), saturation: 0.72 * sat, brightness: dim ? 0.52 : 0.96)

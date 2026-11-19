@@ -183,7 +183,6 @@ enum L10n {
         "iOS only lets an app read a folder it was handed permission for, and a SideStore-signed build sometimes never receives that permission. Copying the music into On My iPhone → Aria from the Files app and adding that folder here works around it.": "iOS 只允许应用读取已授予权限的文件夹，而 SideStore 签名的版本有时始终收不到该权限。从“文件”App 把音乐拷贝到“我的 iPhone → Aria”中，再在此处添加该文件夹即可绕过此问题。",
 
         // Player — now playing
-        "Now Playing": "正在播放",
         "Back to library": "返回资料库",
         "Hide lyrics": "隐藏歌词",
         "Show lyrics": "显示歌词",
@@ -216,6 +215,15 @@ enum L10n {
         "Delete": "删除",
         "Remove from playlist": "从播放列表移除",
         "Rename playlist": "重命名播放列表",
+        "Delete playlist": "删除播放列表",
+        "Import from": "从哪个文件夹导入",
+        "Imported %d playlists.": "已导入 %d 个播放列表。",
+        "No library folder yet.": "还没有添加音乐文件夹。",
+        "Nothing new in “%@”.": "「%@」里没有新的文件夹。",
+        "OK": "好",
+        "Nothing to import": "没有可导入的内容",
+        "“%@” has no new folders — they are already playlists, or it holds no songs.": "「%@」里没有新的文件夹：它们已经是播放列表，或者这里没有歌曲。",
+        "“%@” will be deleted. This can’t be undone.": "「%@」将被删除，此操作不可撤销。",
         "Save": "保存",
         "Play album": "播放专辑",
         "Reveal in Finder": "在访达中显示",

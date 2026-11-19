@@ -85,29 +85,55 @@ final class PlaylistStore: ObservableObject {
 
     /// Builds one playlist per top-level folder of the library — the quickest
     /// way to turn an existing folder layout into something playable.
-    func importFolders(from library: [Track], root: String) -> Int {
-        let rootPath = standardizedLibraryPath(root)
+    /// Turns one library folder into playlists.
+    ///
+    /// Subfolders each become their own playlist, and whatever sits directly in
+    /// the folder becomes one playlist named after it — a flat library (files
+    /// straight in the folder, which is how most of them are laid out) used to
+    /// import nothing at all, because the old rule only looked at subfolders.
+    @discardableResult
+    func importSource(_ source: LibrarySource, from library: [Track], root: String) -> Int {
+        let rootPath = standardizedLibraryPath(source.path)
         let base = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
         var grouped: [String: [Track]] = [:]
+        var loose: [Track] = []
         for track in library {
             let path = standardizedLibraryPath(track.url.path)
             guard path.hasPrefix(base) else { continue }
             let relative = String(path.dropFirst(base.count))
-            guard let folder = relative.split(separator: "/").first, relative.contains("/") else { continue }
-            grouped[String(folder), default: []].append(track)
+            if let folder = relative.split(separator: "/").first, relative.contains("/") {
+                grouped[String(folder), default: []].append(track)
+            } else {
+                loose.append(track)
+            }
+        }
+
+        func ordered(_ tracks: [Track]) -> [Track] {
+            tracks.sorted {
+                ($0.albumKey, $0.discNumber, $0.trackNumber, $0.title)
+                    < ($1.albumKey, $1.discNumber, $1.trackNumber, $1.title)
+            }
         }
 
         var added = 0
         for (folder, tracks) in grouped.sorted(by: { $0.key < $1.key }) {
             guard !playlists.contains(where: { $0.name == folder }) else { continue }
-            let ordered = tracks.sorted {
-                ($0.albumKey, $0.discNumber, $0.trackNumber, $0.title)
-                    < ($1.albumKey, $1.discNumber, $1.trackNumber, $1.title)
-            }
-            create(named: folder, tracks: ordered, root: root)
+            create(named: folder, tracks: ordered(tracks), root: root)
+            added += 1
+        }
+        // A folder that is itself a playlist's worth of music.
+        if !loose.isEmpty,
+           grouped[source.name] == nil,
+           !playlists.contains(where: { $0.name == source.name }) {
+            create(named: source.name, tracks: ordered(loose), root: root)
             added += 1
         }
         return added
+    }
+
+    /// Kept for callers that only know a path (the single-folder case).
+    func importFolders(from library: [Track], root: String) -> Int {
+        importSource(LibrarySource(path: root), from: library, root: root)
     }
 
     // MARK: - Persistence

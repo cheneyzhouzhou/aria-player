@@ -311,6 +311,28 @@ struct SettingsView: View {
                             }
                         }
 
+                        HStack(spacing: 10) {
+                            Button(L("Add folder…")) { addFolder() }
+                                .buttonStyle(PillButtonStyle(kind: .tonal, palette: p))
+                                .disabled(library.isScanning)
+
+                            #if os(macOS)
+                            Button(L("Add Apple Music Library")) { addMusicAppFolder() }
+                                .buttonStyle(PillButtonStyle(kind: .tonal, palette: p))
+                                .disabled(library.isScanning)
+                            #endif
+
+                            if library.isScanning {
+                                HStack(spacing: 6) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    Text(L("Scanning…"))
+                                        .font(.body(11))
+                                        .foregroundStyle(p.onSurfaceVariant)
+                                }
+                            }
+                        }
+
                         #if os(iOS)
                         VStack(alignment: .leading, spacing: 7) {
                             Toggle(isOn: Binding(
@@ -353,28 +375,6 @@ struct SettingsView: View {
                         }
                         .padding(.vertical, 4)
                         #endif
-
-                        HStack(spacing: 10) {
-                            Button(L("Add folder…")) { addFolder() }
-                                .buttonStyle(PillButtonStyle(kind: .tonal, palette: p))
-                                .disabled(library.isScanning)
-
-                            #if os(macOS)
-                            Button(L("Add Apple Music Library")) { addMusicAppFolder() }
-                                .buttonStyle(PillButtonStyle(kind: .tonal, palette: p))
-                                .disabled(library.isScanning)
-                            #endif
-
-                            if library.isScanning {
-                                HStack(spacing: 6) {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    Text(L("Scanning…"))
-                                        .font(.body(11))
-                                        .foregroundStyle(p.onSurfaceVariant)
-                                }
-                            }
-                        }
 
                         #if os(macOS)
                         Text(L("Add a custom folder or songs from Apple Music. DRM-protected songs will be skipped."))
