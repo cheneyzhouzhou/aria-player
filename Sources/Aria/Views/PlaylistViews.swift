@@ -301,6 +301,7 @@ struct PlaylistDetailView: View {
     }
 
     var body: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 header
@@ -329,6 +330,15 @@ struct PlaylistDetailView: View {
             .padding(.bottom, playerClearance)
         }
         .scrollContentBackground(.hidden)
+        .overlay(alignment: .bottomTrailing) {
+            NowPlayingLocator(tracks: tracks, proxy: proxy)
+                .padding(.trailing, screenInset + 4)
+                #if os(iOS)
+                .padding(.bottom, 178)
+                #else
+                .padding(.bottom, 96)
+                #endif
+        }
         .alert(L("Rename playlist"), isPresented: $renaming) {
             TextField(L("Name"), text: $draftName)
             Button(L("Cancel"), role: .cancel) {}
@@ -336,6 +346,7 @@ struct PlaylistDetailView: View {
                 let name = draftName.trimmingCharacters(in: .whitespaces)
                 if !name.isEmpty { playlistStore.rename(playlist, to: name) }
             }
+        }
         }
     }
 

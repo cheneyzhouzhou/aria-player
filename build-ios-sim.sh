@@ -39,7 +39,11 @@ cat > "$APP/Info.plist" <<'PLIST'
     <key>UIDeviceFamily</key><array><integer>1</integer></array>
     <key>UILaunchScreen</key><dict/>
     <key>UISupportedInterfaceOrientations</key>
-    <array><string>UIInterfaceOrientationPortrait</string></array>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
     <key>CFBundleSupportedPlatforms</key><array><string>iPhoneSimulator</string></array>
 
     <!-- Aria's Documents folder in Finder, and in the Files app. -->

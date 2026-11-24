@@ -18,6 +18,7 @@ struct PhoneRootView: View {
     /// the page it filters, so whatever is narrowing the list is visible there
     /// and can be cleared there.
     @State private var search = ""
+    @FocusState private var searchFocused: Bool
     @State private var showNowPlaying = false
     @Environment(\.scenePhase) private var scenePhase
     /// Set when the app goes away, so the return trip re-reads the folders:
@@ -70,7 +71,7 @@ struct PhoneRootView: View {
 
     @EnvironmentObject private var dialogs: DialogCenter
 
-    var body: some View {
+    private var portraitRoot: some View {
         ZStack(alignment: .bottom) {
             AppBackground(active).ignoresSafeArea()
 
@@ -138,15 +139,101 @@ struct PhoneRootView: View {
                 Task { await library.scan() }
             }
         }
-        .fullScreenCover(isPresented: $showNowPlaying) {
-            PhoneNowPlayingView(palette: nowPlayingPalette) { showNowPlaying = false }
-                .environmentObject(player)
-        }
         // Above the bars as well as the page: a question has to dim the whole
         // window, or it reads as a patch of black and the bar stays live.
         // The host sits outside the page's subtree, so the active palette has
         // to be handed to it explicitly.
         .overlay { DialogHost(center: dialogs).environment(\.palette, active) }
+    }
+
+    var body: some View {
+        // Keep the presentation owner stable across rotations. Attaching the
+        // full-screen cover directly to the geometry wrapper made a portrait
+        // -> landscape switch tear the cover down for one frame and show the
+        // library underneath before the player came back.
+        ZStack {
+            GeometryReader { geo in
+                if geo.size.width > geo.size.height {
+                    landscapeRoot
+                } else {
+                    portraitRoot
+                }
+            }
+
+            // An in-window layer, not a system fullScreenCover: UIKit rebuilt
+            // the presented controller on a portrait -> landscape switch and
+            // for one frame exposed the library underneath. As a sibling of
+            // the geometry branch this view is never torn down by rotation.
+            if showNowPlaying {
+                PhoneNowPlayingView(palette: nowPlayingPalette) { showNowPlaying = false }
+                    .environmentObject(player)
+                    .environmentObject(dialogs)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .zIndex(100)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.28), value: showNowPlaying)
+        // Both orientations share the same environment, dialogs and player.
+        .environmentObject(nav)
+        .environment(\.palette, active)
+        .animation(.easeInOut(duration: 0.45), value: active)
+        .onChange(of: destination) { _, _ in nav.reset() }
+        .onChange(of: tab) { _, _ in nav.reset() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background {
+                needsRescanOnReturn = true
+            } else if phase == .active, needsRescanOnReturn {
+                needsRescanOnReturn = false
+                Task { await library.scan() }
+            }
+        }
+        .overlay { DialogHost(center: dialogs).environment(\.palette, active) }
+    }
+
+    /// Landscape shell: the destinations become a vertical rail on the far
+    /// left and the page occupies the space that is left, so nothing is
+    /// covered by chrome. The mini player drops to the bottom edge because
+    /// there is no bar underneath it any more.
+    @ViewBuilder
+    private var landscapeRoot: some View {
+        ZStack(alignment: .bottom) {
+            AppBackground(active).ignoresSafeArea()
+
+            HStack(spacing: 0) {
+                PhoneNavRail(destination: $destination, palette: active)
+                    .frame(width: 84)
+
+                content
+                    .background {
+                        if AppearanceSettings.shared.usesGlass {
+                            GlassSurface(shape: RoundedRectangle(cornerRadius: 26, style: .continuous),
+                                         tint: active.surfaceContainer, border: active.outline,
+                                         radius: 26, strong: true)
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: AppearanceSettings.shared.usesGlass ? 26 : 0,
+                                                style: .continuous))
+                    .padding(.trailing, 8)
+                    .padding(.vertical, 6)
+                    .offset(x: nav.route != nil ? backSwipeOffset : 0)
+                    .simultaneousGesture(backSwipe, including: nav.route == nil ? .none : .all)
+            }
+
+            if player.current != nil {
+                PhoneMiniPlayer(palette: AppearanceSettings.shared.usesMorandi ? active : nowPlayingPalette) {
+                    showNowPlaying = true
+                }
+                .animation(.easeInOut(duration: 0.30), value: nowPlayingSeed)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .padding(.leading, 90)
+                .padding(.trailing, 12)
+                .padding(.bottom, 4)
+            }
+        }
+        .animation(.spring(response: 0.4, dampingFraction: 0.9), value: player.current)
+        .onChange(of: player.current?.albumKey, initial: true) { _, _ in refreshNowPlayingSeed() }
+        .onChange(of: palettes.revision) { _, _ in refreshNowPlayingSeed() }
     }
 
     @ViewBuilder
@@ -219,7 +306,8 @@ struct PhoneRootView: View {
                     .foregroundStyle(active.onSurface)
                 Spacer(minLength: 8)
                 SearchPill(text: $search, palette: active,
-                           prompt: L("Search"), width: 148)
+                           prompt: L("Search"), width: 148,
+                           focus: $searchFocused)
             }
             // In the glass theme the page sits inside the floating panel, and
             // without this the title's cap-height lands ~14pt from the
@@ -263,6 +351,10 @@ struct PhoneRootView: View {
                 }
             }
             .offset(x: swipeOffset)
+            // Tapping the list or a tab chip puts the keyboard away: a SwiftUI
+            // text field does not resign when another control is tapped.
+            .simultaneousGesture(TapGesture().onEnded { searchFocused = false })
+            .onChange(of: tab) { _, _ in searchFocused = false }
             // Back on: the row menu is a system action sheet now, so it no
             // longer shares a gesture arena with this drag — the two were only
             // ever in conflict while the popup was a UIKit menu anchored to a
@@ -397,6 +489,51 @@ struct PhoneRootView: View {
 }
 
 // MARK: - Floating nav bar
+
+/// The landscape counterpart of `PhoneNavBar`: same destinations, same
+/// material, stacked down the left edge instead of along the bottom.
+struct PhoneNavRail: View {
+    @Binding var destination: RailDestination
+    let palette: M3Palette
+    @ObservedObject private var appearance = AppearanceSettings.shared
+
+    var body: some View {
+        VStack(spacing: 12) {
+            ForEach(RailDestination.allCases, id: \.self) { item in
+                Button {
+                    withAnimation(.snappy(duration: 0.25)) { destination = item }
+                } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: item.icon)
+                            .font(.system(size: 19, weight: .medium))
+                            .foregroundStyle(destination == item
+                                             ? palette.onPrimaryContainer : palette.onSurfaceVariant)
+                            .frame(width: 52, height: 44)
+                            .background {
+                                Capsule().fill(destination == item
+                                               ? palette.primaryContainer : .clear)
+                            }
+                        Text(item.title)
+                            .font(.label(9.5, destination == item ? .semibold : .medium))
+                            .foregroundStyle(destination == item
+                                             ? palette.onSurface : palette.onSurfaceVariant)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 14)
+        .background {
+            SurfaceRole.panel.background(palette,
+                shape: AnyShape(Capsule()), radius: 999, strong: true)
+        }
+        .padding(.leading, 6)
+    }
+}
 
 struct PhoneNavBar: View {
     @Binding var destination: RailDestination
@@ -534,6 +671,10 @@ struct PhoneNowPlayingView: View {
     let onDismiss: () -> Void
 
     @EnvironmentObject var player: AudioPlayer
+    /// Stable signal for the orientation change: the geometry reader's size
+    /// can pass through intermediate values, but this flips once per turn and
+    /// drives the crossfade between the two stage layouts.
+    @Environment(\.verticalSizeClass) private var sizeClass
     @StateObject private var backdrop = PhoneStageBackdrop()
     @State private var scrubFraction: Double?
     @State private var showQueue = false
@@ -544,6 +685,12 @@ struct PhoneNowPlayingView: View {
     /// Vertical offset while the player is being pulled down to dismiss it,
     /// so the full-screen cover behaves like the sheets it hosts.
     @State private var dismissDrag: CGFloat = 0
+    /// Wet-mac behaviour for the landscape stage: the chrome floats over the
+    /// artwork and fades away after a few idle seconds, so the page is just
+    /// cover and lyrics until it is touched again.
+    @State private var chromeVisible = true
+    @State private var chromeTask: Task<Void, Never>?
+    @Environment(\.verticalSizeClass) private var vSizeClass
 
     /// Trial: when the processed cover fills the page, the foreground switches
     /// to white — the same treatment the macOS stage uses. Before the bitmap is
@@ -636,6 +783,12 @@ struct PhoneNowPlayingView: View {
                     .transition(.opacity)
             }
 
+            GeometryReader { geo in
+                let landscape = geo.size.width > geo.size.height
+                if landscape {
+                    landscapeStage(in: geo.size)
+                        .transition(.scale(scale: 0.97).combined(with: .opacity))
+                } else {
             VStack(spacing: 0) {
                 header
 
@@ -710,6 +863,10 @@ struct PhoneNowPlayingView: View {
                 Spacer(minLength: 10)
             }
             .padding(.bottom, 16)
+                    .transition(.scale(scale: 1.03).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.36), value: sizeClass)
 
             // Popups live in this ZStack, exactly like the floating player
             // bar: a system sheet's presenting view is isolated by UIKit, so a
@@ -763,10 +920,212 @@ struct PhoneNowPlayingView: View {
         )
     }
 
+    /// The landscape stage mirrors the desktop player: cover column on the
+    /// left, lyrics on the right, and every control floating over them instead
+    /// of taking a slice of a screen that is only ~390pt tall. Five idle
+    /// seconds and the chrome fades out; touching the page brings it back.
+    @ViewBuilder
+    private func landscapeStage(in size: CGSize) -> some View {
+        let side = min(size.height * 0.46, 205)
+
+        ZStack {
+            HStack(alignment: .center, spacing: 22) {
+                VStack(spacing: 7) {
+                    CoverArt(track: player.current, cacheKey: player.current?.albumKey ?? "",
+                             radius: 16, palette: palette,
+                             fallback: player.current?.hasArtwork == true ? nil : DefaultCover.image)
+                        .frame(width: side, height: side)
+                        .shadow(color: .black.opacity(0.35), radius: 16, y: 7)
+
+                    VStack(spacing: 3) {
+                        Text(player.current?.title ?? "")
+                            .font(.display(18, .semibold))
+                            .foregroundStyle(titleColor)
+                            .lineLimit(1)
+                        Text(player.current?.artist ?? "")
+                            .font(.body(14.5, .medium))
+                            .foregroundStyle(secondaryColor)
+                            .lineLimit(1)
+                    }
+                    .frame(width: side + 44)
+                }
+
+                if let track = player.current {
+                    LyricsPane(track: track, currentTime: player.currentTime,
+                               palette: palette, onTap: {},
+                               showsPanel: false,
+                               primaryColor: titleColor,
+                               secondaryColor: secondaryColor,
+                               accentColor: coverAccent,
+                               fontSize: 23)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    Spacer(minLength: 0)
+                }
+            }
+            .padding(.horizontal, 26)
+            .padding(.vertical, 10)
+            // No reserved band for the floating card: it covers the bottom
+            // while it is up and gets out of the way when it fades, so the
+            // page uses the full height instead of leaving a dead strip.
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            chrome
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if chromeVisible {
+                chromeTask?.cancel()
+                withAnimation(.easeInOut(duration: 0.45)) { chromeVisible = false }
+            } else {
+                revealChrome()
+            }
+        }
+        .onAppear { restartIdleHide() }
+        .onDisappear { chromeTask?.cancel() }
+        .onChange(of: popupOpen) { _, open in
+            if open {
+                chromeTask?.cancel()
+                withAnimation(.easeInOut(duration: 0.25)) { chromeVisible = false }
+            } else {
+                revealChrome()
+            }
+        }
+    }
+
+    /// Floating close/icons at the top and transport card at the bottom.
+    private var chrome: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                IconButton(system: "chevron.down", size: 38, glyph: 14,
+                           fill: buttonFill,
+                           foreground: onStage ? Color.white.opacity(0.9) : palette.onSurface,
+                           action: onDismiss)
+
+                Spacer(minLength: 8)
+
+                IconButton(system: "music.note.list", size: 38, glyph: 14,
+                           fill: showQueue ? coverAccent : buttonFill,
+                           foreground: showQueue ? coverAccentOn
+                                                 : (onStage ? Color.white.opacity(0.9) : palette.onSurface)) {
+                    withAnimation(.easeOut(duration: 0.24)) { showQueue = true }
+                }
+
+                IconButton(system: "slider.vertical.3", size: 38, glyph: 14,
+                           fill: player.eqEnabled ? coverAccent : buttonFill,
+                           foreground: player.eqEnabled
+                               ? coverAccentOn
+                               : (onStage ? Color.white.opacity(0.9) : palette.onSurface)) {
+                    showEQ = true
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 8)
+
+            Spacer(minLength: 0)
+
+            landscapeControlCard
+                .frame(maxWidth: 560)
+                .padding(.horizontal, 30)
+                .padding(.bottom, 8)
+        }
+        // The queue takes the left half; leaving the transport floating over
+        // the lyrics as well made the stage feel crowded, so the chrome steps
+        // aside while it is open.
+        .opacity(chromeVisible && !popupOpen ? 1 : 0)
+        .allowsHitTesting(chromeVisible && !popupOpen)
+        .animation(.easeInOut(duration: 0.35), value: chromeVisible)
+        .animation(.easeInOut(duration: 0.25), value: popupOpen)
+    }
+
+    /// Progress and transport in one floating card, sized for a short screen.
+    private var landscapeControlCard: some View {
+        VStack(spacing: 4) {
+            scrubber
+
+            HStack(spacing: 16) {
+                chip(system: "shuffle", isOn: player.isShuffled) {
+                    player.isShuffled.toggle()
+                    revealChrome()
+                }
+
+                Button { player.previous() } label: {
+                    Image(systemName: "backward.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(stageOnAccentSoft)
+                        .frame(width: 58, height: 40)
+                        .background(Capsule().fill(stageAccentSoft))
+                }
+                .buttonStyle(.plain)
+
+                Button { player.togglePlayPause() } label: {
+                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 19, weight: .bold))
+                        .foregroundStyle(coverAccentOn)
+                        .frame(width: 64, height: 44)
+                        .background(RoundedRectangle(cornerRadius: player.isPlaying ? 16 : 22,
+                                                     style: .continuous)
+                            .fill(coverAccent))
+                }
+                .buttonStyle(.plain)
+                .animation(.spring(response: 0.32, dampingFraction: 0.7), value: player.isPlaying)
+
+                Button { player.next() } label: {
+                    Image(systemName: "forward.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(stageOnAccentSoft)
+                        .frame(width: 58, height: 40)
+                        .background(Capsule().fill(stageAccentSoft))
+                }
+                .buttonStyle(.plain)
+
+                chip(system: player.repeatMode.symbol, isOn: player.repeatMode != .off) {
+                    switch player.repeatMode {
+                    case .off: player.repeatMode = .all
+                    case .all: player.repeatMode = .one
+                    case .one: player.repeatMode = .off
+                    }
+                    revealChrome()
+                }
+            }
+            .padding(.bottom, 4)
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 6)
+        .background {
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(palette.surfaceContainer.opacity(onStage ? 0.42 : 0.86))
+                .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .stroke(Color.white.opacity(onStage ? 0.16 : 0.0), lineWidth: 0.8))
+                .shadow(color: .black.opacity(0.22), radius: 18, y: 8)
+        }
+        .simultaneousGesture(TapGesture().onEnded { revealChrome() })
+    }
+
+    private func revealChrome() {
+        if !chromeVisible {
+            withAnimation(.easeInOut(duration: 0.25)) { chromeVisible = true }
+        }
+        restartIdleHide()
+    }
+
+    private func restartIdleHide() {
+        chromeTask?.cancel()
+        chromeTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled else { return }
+            guard !showQueue, !showEQ, !showAudioChain else { return }
+            withAnimation(.easeInOut(duration: 0.45)) { chromeVisible = false }
+        }
+    }
+
     /// Vertical offset while a popup is being pulled down to dismiss it.
     /// The gesture lives only on a top grabber, so the lists and faders below
     /// keep their own scrolling.
     @State private var popupDrag: CGFloat = 0
+
+    /// Any of the floating panels — queue, equalizer, audio chain.
+    private var popupOpen: Bool { showQueue || showEQ || showAudioChain }
 
     private func closePopup() {
         popupDrag = 0
@@ -794,6 +1153,36 @@ struct PhoneNowPlayingView: View {
     /// scrim, the rounded silhouette, the shadow and the tap-to-dismiss.
     private var popupLayer: some View {
         GeometryReader { geo in
+            if geo.size.width > geo.size.height, popupOpen {
+                // Landscape: the queue becomes a left-hand panel so the lyrics
+                // stay visible next to it, instead of a sheet that covers the
+                // whole short screen.
+                ZStack(alignment: .leading) {
+                    Color.black.opacity(0.12)
+                        .ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onTapGesture { closePopup() }
+
+                    popupCard
+                        // The equalizer carries ten sliders plus a preset grid
+                        // and needs real width; the queue is just rows.
+                        .frame(width: showEQ
+                               ? min(geo.size.width * 0.55, 480)
+                               : min(geo.size.width * 0.38, 340))
+                        .frame(maxHeight: .infinity)
+                        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                        .shadow(color: .black.opacity(0.38), radius: 30, x: 10)
+                        // Flush to the safe-area edge: the only gap left is
+                        // the sensor housing, which a panel may not cover.
+                        .padding(.leading, 0)
+                        .padding(.vertical, 8)
+                }
+                // Without this the home-indicator inset counts only at the
+                // bottom, so the panel sat 8pt from the top and ~29pt from the
+                // bottom. Ignoring it makes both margins 8.
+                .ignoresSafeArea(edges: .bottom)
+                .transition(.move(edge: .leading).combined(with: .opacity))
+            } else {
             ZStack(alignment: .bottom) {
                 Color.black.opacity(0.12)
                     .ignoresSafeArea()
@@ -811,8 +1200,11 @@ struct PhoneNowPlayingView: View {
                     .padding(.bottom, 10)
             }
             .ignoresSafeArea(edges: .bottom)
+            }
         }
-        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .transition(vSizeClass == .compact
+                    ? .move(edge: .leading).combined(with: .opacity)
+                    : .move(edge: .bottom).combined(with: .opacity))
     }
 
     /// The sheet-like grabber. Only this strip owns the dismiss drag. It is

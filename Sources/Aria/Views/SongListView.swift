@@ -23,6 +23,7 @@ struct SongListView: View {
     @Environment(\.palette) private var palette
 
     var body: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             LazyVStack(spacing: 6) {
                 if !tracks.isEmpty {
@@ -52,6 +53,16 @@ struct SongListView: View {
             .padding(.bottom, playerClearance)
         }
         .scrollContentBackground(.hidden)
+        .overlay(alignment: .bottomTrailing) {
+            NowPlayingLocator(tracks: tracks, proxy: proxy)
+                .padding(.trailing, screenInset + 4)
+                #if os(iOS)
+                .padding(.bottom, 178)  // clear of the floating mini player
+                #else
+                .padding(.bottom, 96)
+                #endif
+        }
+        }
     }
 }
 

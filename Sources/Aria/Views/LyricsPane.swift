@@ -19,6 +19,9 @@ struct LyricsPane: View {
     var primaryColor: Color? = nil
     var secondaryColor: Color? = nil
     var accentColor: Color? = nil
+    /// Line size. The landscape stage has far more width to spend, so it asks
+    /// for a larger line than the portrait sheet.
+    var fontSize: CGFloat = 20
 
     @State private var lyrics: Lyrics?
     @State private var loaded = false
@@ -112,7 +115,7 @@ struct LyricsPane: View {
 
         // Font on each Text: the mask measures its own view, so a font applied
         // outside would size the mask by the default type instead.
-        let font = Font.body(18, isActive ? .semibold : .regular)
+        let font = Font.body(fontSize, isActive ? .semibold : .regular)
 
         ZStack {
             // Every row shares one size and a low base alpha; the sweep is what

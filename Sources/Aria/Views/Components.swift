@@ -161,6 +161,12 @@ struct SearchPill: View {
     var palette: M3Palette
     var prompt: String = "Songs, albums, artists"
     var width: CGFloat? = 300
+    /// Optional so a page can dismiss the keyboard when tapping elsewhere;
+    /// the pill manages its own focus when nobody hands it one.
+    var focus: FocusState<Bool>.Binding? = nil
+
+    @FocusState private var ownFocus: Bool
+    private var activeFocus: FocusState<Bool>.Binding { focus ?? $ownFocus }
 
     var body: some View {
         HStack(spacing: 9) {
@@ -172,6 +178,8 @@ struct SearchPill: View {
                 .textFieldStyle(.plain)
                 .font(.body(13))
                 .foregroundStyle(palette.onSurface)
+                .focused(activeFocus)
+                .onSubmit { activeFocus.wrappedValue = false }
 
             if !text.isEmpty {
                 Button { text = "" } label: {
@@ -186,6 +194,14 @@ struct SearchPill: View {
         .padding(.vertical, 10)
         .frame(width: width)
         .background(Capsule().fill(palette.surfaceContainer))
+        #if os(iOS)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button(L("Done")) { activeFocus.wrappedValue = false }
+            }
+        }
+        #endif
     }
 }
 

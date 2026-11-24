@@ -217,6 +217,7 @@ enum L10n {
         "Rename playlist": "重命名播放列表",
         "Delete playlist": "删除播放列表",
         "Import from": "从哪个文件夹导入",
+        "Locate now playing": "定位正在播放的歌曲",
         "Imported %d playlists.": "已导入 %d 个播放列表。",
         "No library folder yet.": "还没有添加音乐文件夹。",
         "Nothing new in “%@”.": "「%@」里没有新的文件夹。",
