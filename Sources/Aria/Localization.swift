@@ -218,6 +218,8 @@ enum L10n {
         "Delete playlist": "删除播放列表",
         "Import from": "从哪个文件夹导入",
         "Locate now playing": "定位正在播放的歌曲",
+        "Spinning vinyl cover": "旋转黑胶封面",
+        "Artwork spins like a record during playback.": "播放时封面像唱片一样旋转。",
         "Imported %d playlists.": "已导入 %d 个播放列表。",
         "No library folder yet.": "还没有添加音乐文件夹。",
         "Nothing new in “%@”.": "「%@」里没有新的文件夹。",

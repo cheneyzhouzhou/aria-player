@@ -18,8 +18,9 @@ struct MiniPlayer: View {
     var body: some View {
         HStack(spacing: 12) {
             if let track = player.current {
-                CoverArt(track: track, cacheKey: track.albumKey,
-                         radius: Radius.thumb, palette: palette)
+                SpinningCover(track: track, cacheKey: track.albumKey,
+                              radius: Radius.thumb, palette: palette,
+                              isPlaying: player.isPlaying)
                     .frame(width: 44, height: 44)
 
                 VStack(alignment: .leading, spacing: 1) {

@@ -251,6 +251,16 @@ struct SettingsView: View {
                             morandiSwatches
                         }
 
+                        Toggle(isOn: $appearance.vinylRecords) {
+                            Text(L("Spinning vinyl cover"))
+                                .font(.body(13.5, .medium))
+                                .foregroundStyle(p.onSurface)
+                        }
+                        .toggleStyle(.switch)
+                        .tint(p.primary)
+                        Text(L("Artwork spins like a record during playback."))
+                            .font(.body(11))
+                            .foregroundStyle(p.onSurfaceVariant)
                     }
                 }
 

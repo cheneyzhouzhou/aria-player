@@ -62,6 +62,11 @@ final class AppearanceSettings: ObservableObject {
     static let shared = AppearanceSettings()
 
     @Published var theme: AppearanceTheme
+    /// B-style vinyl: the artwork is clipped to a circle and spins while the
+    /// track plays. Persisted the same way as the other appearance choices.
+    @Published var vinylRecords: Bool {
+        didSet { UserDefaults.standard.set(vinylRecords, forKey: "ariaVinylRecords") }
+    }
     /// Light / dark / follow-system, applied app-wide via `preferredColorScheme`.
     @Published var mode: AppearanceMode
     /// The Morandi theme's accent hue (the dusty presets in Settings pick from
@@ -81,6 +86,8 @@ final class AppearanceSettings: ObservableObject {
     init() {
         let raw = UserDefaults.standard.string(forKey: "ariaAppearanceTheme")
         theme = AppearanceTheme(rawValue: raw ?? "") ?? .solid
+        // On by default; an explicit choice still wins over the default.
+        vinylRecords = UserDefaults.standard.object(forKey: "ariaVinylRecords") as? Bool ?? true
         // Fresh installs ship with Light (打包默认); an explicit choice always
         // wins over the default.
         let rawMode = UserDefaults.standard.string(forKey: "ariaAppearanceMode")

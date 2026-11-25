@@ -1,5 +1,6 @@
 #if os(iOS)
 import SwiftUI
+import UIKit
 
 /// Phone layout: the same Material surfaces as the Mac, rearranged around a
 /// floating nav bar and mini player the way the design was meant to be used.
@@ -18,7 +19,8 @@ struct PhoneRootView: View {
     /// the page it filters, so whatever is narrowing the list is visible there
     /// and can be cleared there.
     @State private var search = ""
-    @FocusState private var searchFocused: Bool
+    /// Plain boolean now: the iOS field is a UITextField that focuses itself.
+    @State private var searchFocused = false
     @State private var showNowPlaying = false
     @Environment(\.scenePhase) private var scenePhase
     /// Set when the app goes away, so the return trip re-reads the folders:
@@ -188,7 +190,17 @@ struct PhoneRootView: View {
                 Task { await library.scan() }
             }
         }
-        .overlay { DialogHost(center: dialogs).environment(\.palette, active) }
+        .overlay {
+            DialogHost(center: dialogs)
+                .environment(\.palette, active)
+                // An empty host must not swallow touches meant for the page.
+                .allowsHitTesting(dialogs.request != nil || dialogs.showsImportPicker)
+        }
+        .onChange(of: searchFocused) { _, active in
+            guard !active else { return }
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                            to: nil, from: nil, for: nil)
+        }
     }
 
     /// Landscape shell: the destinations become a vertical rail on the far
@@ -308,6 +320,20 @@ struct PhoneRootView: View {
                 SearchPill(text: $search, palette: active,
                            prompt: L("Search"), width: 148,
                            focus: $searchFocused)
+                    // The pill sits inside several nested ZStacks now (root,
+                    // orientation branch, glass page). Give the whole pill an
+                    // explicit focus target so a tap always reaches the field
+                    // regardless of what the surrounding gesture recognisers
+                    // claim; the clear button still wins over this gesture.
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        // Defer one turn: a sibling tap gesture on the page
+                        // clears focus on the same touch, so setting it
+                        // inline loses immediately. Re-assert after it runs.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                            searchFocused = true
+                        }
+                    }
             }
             // In the glass theme the page sits inside the floating panel, and
             // without this the title's cap-height lands ~14pt from the
@@ -606,12 +632,10 @@ struct PhoneMiniPlayer: View {
     var body: some View {
         HStack(spacing: 11) {
             if let track = player.current {
-                CoverArt(track: track, cacheKey: track.albumKey,
-                         radius: Radius.thumb, palette: palette,
-                         // Same rule as the full player: a track with no sleeve
-                         // of its own gets the bundled default cover rather
-                         // than the bright placeholder tile.
-                         fallback: track.hasArtwork ? nil : DefaultCover.image)
+                SpinningCover(track: track, cacheKey: track.albumKey,
+                              radius: Radius.thumb, palette: palette,
+                              fallback: track.hasArtwork ? nil : DefaultCover.image,
+                              isPlaying: player.isPlaying)
                     .frame(width: 42, height: 42)
 
                 VStack(alignment: .leading, spacing: 1) {
@@ -671,6 +695,7 @@ struct PhoneNowPlayingView: View {
     let onDismiss: () -> Void
 
     @EnvironmentObject var player: AudioPlayer
+    @ObservedObject private var appearance = AppearanceSettings.shared
     /// Stable signal for the orientation change: the geometry reader's size
     /// can pass through intermediate values, but this flips once per turn and
     /// drives the crossfade between the two stage layouts.
@@ -812,13 +837,11 @@ struct PhoneNowPlayingView: View {
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 .transition(.opacity)
                         } else {
-                            CoverArt(track: track, cacheKey: track.albumKey,
-                                     radius: 30, palette: palette,
-                                     // Tracks without their own sleeve fall
-                                     // back to the bundled default cover, so the
-                                     // player shows the same rounded rectangle
-                                     // either way — no second display path.
-                                     fallback: track.hasArtwork ? nil : DefaultCover.image)
+                            SpinningCover(track: track, cacheKey: track.albumKey,
+                                          radius: appearance.vinylRecords ? 999 : 30,
+                                          palette: palette,
+                                          fallback: track.hasArtwork ? nil : DefaultCover.image,
+                                          isPlaying: player.isPlaying)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 .shadow(color: .black.opacity(0.35), radius: 26, y: 12)
                                 .contentShape(Rectangle())
@@ -931,9 +954,12 @@ struct PhoneNowPlayingView: View {
         ZStack {
             HStack(alignment: .center, spacing: 22) {
                 VStack(spacing: 7) {
-                    CoverArt(track: player.current, cacheKey: player.current?.albumKey ?? "",
-                             radius: 16, palette: palette,
-                             fallback: player.current?.hasArtwork == true ? nil : DefaultCover.image)
+                    SpinningCover(track: player.current,
+                                  cacheKey: player.current?.albumKey ?? "",
+                                  radius: appearance.vinylRecords ? 999 : 16,
+                                  palette: palette,
+                                  fallback: player.current?.hasArtwork == true ? nil : DefaultCover.image,
+                                  isPlaying: player.isPlaying)
                         .frame(width: side, height: side)
                         .shadow(color: .black.opacity(0.35), radius: 16, y: 7)
 

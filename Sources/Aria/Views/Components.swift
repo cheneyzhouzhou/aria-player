@@ -161,12 +161,10 @@ struct SearchPill: View {
     var palette: M3Palette
     var prompt: String = "Songs, albums, artists"
     var width: CGFloat? = 300
-    /// Optional so a page can dismiss the keyboard when tapping elsewhere;
-    /// the pill manages its own focus when nobody hands it one.
-    var focus: FocusState<Bool>.Binding? = nil
+    var focus: Binding<Bool>? = nil
 
-    @FocusState private var ownFocus: Bool
-    private var activeFocus: FocusState<Bool>.Binding { focus ?? $ownFocus }
+    @State private var ownFocused = false
+    private var activeFocus: Binding<Bool> { focus ?? $ownFocused }
 
     var body: some View {
         HStack(spacing: 9) {
@@ -174,12 +172,18 @@ struct SearchPill: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(palette.onSurfaceVariant)
 
+            #if os(iOS)
+            NativeSearchField(text: $text, prompt: L(prompt),
+                              focused: activeFocus, doneTitle: L("Done"))
+                // Match the old SwiftUI field's intrinsic height; 40 padded
+                // the capsule out to 60pt tall and looked inflated.
+                .frame(height: 24)
+            #else
             TextField(L(prompt), text: $text)
                 .textFieldStyle(.plain)
                 .font(.body(13))
                 .foregroundStyle(palette.onSurface)
-                .focused(activeFocus)
-                .onSubmit { activeFocus.wrappedValue = false }
+            #endif
 
             if !text.isEmpty {
                 Button { text = "" } label: {
@@ -191,19 +195,90 @@ struct SearchPill: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        // Fixed height rather than padding: the native field has no intrinsic
+        // height, so padding alone let the capsule grow well past its old size.
+        .frame(height: 37)
         .frame(width: width)
         .background(Capsule().fill(palette.surfaceContainer))
-        #if os(iOS)
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button(L("Done")) { activeFocus.wrappedValue = false }
-            }
-        }
-        #endif
     }
 }
+
+#if os(iOS)
+/// A real UIKit text field. SwiftUI's FocusState binding proved unreliable
+/// here: a tap could leave the field unfocused with no keyboard at all.
+/// UIKit's first-responder call is explicit and cannot be lost in a body
+/// recompute.
+struct NativeSearchField: UIViewRepresentable {
+    @Binding var text: String
+    let prompt: String
+    @Binding var focused: Bool
+    let doneTitle: String
+
+    func makeUIView(context: Context) -> UITextField {
+        let field = UITextField()
+        field.borderStyle = .none
+        field.font = .systemFont(ofSize: 13)
+        field.textColor = UIColor.label
+        field.placeholder = prompt
+        field.text = text
+        field.returnKeyType = .done
+        field.autocorrectionType = .no
+        field.delegate = context.coordinator
+        field.addTarget(context.coordinator, action: #selector(Coordinator.changed),
+                        for: .editingChanged)
+
+        let toolbar = UIToolbar(frame: CGRect(x: 0, y: 0, width: 0, height: 44))
+        toolbar.items = [
+            UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil),
+            UIBarButtonItem(title: doneTitle, style: .done,
+                            target: context.coordinator,
+                            action: #selector(Coordinator.done))
+        ]
+        toolbar.sizeToFit()
+        field.inputAccessoryView = toolbar
+
+        let tap = UITapGestureRecognizer(target: context.coordinator,
+                                         action: #selector(Coordinator.tapped))
+        field.addGestureRecognizer(tap)
+        context.coordinator.field = field
+        return field
+    }
+
+    func updateUIView(_ field: UITextField, context: Context) {
+        if field.text != text { field.text = text }
+        // Only ever *raise* the keyboard here. A tap makes UIKit focus the
+        // field on its own; resigning from this update ran with a still-false
+        // binding and killed the keyboard in the same run loop, which read as
+        // "tapping does nothing". Dismissal is handled explicitly by the page.
+        if focused, !field.isFirstResponder {
+            DispatchQueue.main.async { field.becomeFirstResponder() }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: NativeSearchField
+        weak var field: UITextField?
+
+        init(_ parent: NativeSearchField) { self.parent = parent }
+
+        @objc func changed(_ field: UITextField) { parent.text = field.text ?? "" }
+        @objc func done() { parent.focused = false }
+        @objc func tapped() {
+            field?.becomeFirstResponder()
+            parent.focused = true
+        }
+
+        func textFieldShouldReturn(_ field: UITextField) -> Bool {
+            parent.focused = false
+            return true
+        }
+        func textFieldDidBeginEditing(_ field: UITextField) { parent.focused = true }
+        func textFieldDidEndEditing(_ field: UITextField) { parent.focused = false }
+    }
+}
+#endif
 
 // MARK: - Cards
 
@@ -280,6 +355,162 @@ struct CoverArt: View {
         ArtworkCache.shared.artwork(for: track, key: cacheKey) { loaded in
             guard let loaded else { return }
             withAnimation(.easeOut(duration: 0.2)) { image = loaded }
+        }
+    }
+}
+
+/// Time-based spin state. Pausing captures the exact angle at that instant
+/// and freezes it, so no animation-cancellation trick is needed and thedisc
+/// cannot jump back to an older position on a real device.
+private final class SpinClock: ObservableObject {
+    @Published private(set) var baseAngle: Double = 0
+    private(set) var startedAt = Date()
+    @Published private(set) var frozen = true
+    /// 18 seconds per revolution.
+    private let rate: Double = 20
+
+    func angle(at date: Date) -> Double {
+        guard !frozen else { return baseAngle }
+        return (baseAngle + date.timeIntervalSince(startedAt) * rate)
+            .truncatingRemainder(dividingBy: 360)
+    }
+
+    func pause(at date: Date) {
+        baseAngle = angle(at: date)
+        startedAt = date
+        frozen = true
+    }
+
+    func resume(at date: Date) {
+        startedAt = date
+        frozen = false
+    }
+}
+
+private struct SpinAngle: Animatable, ViewModifier {
+    var angle: Double
+    var onAngle: (Double) -> Void
+
+    var animatableData: Double {
+        get { angle }
+        set { angle = newValue; onAngle(newValue) }
+    }
+
+    func body(content: Content) -> some View {
+        content.rotationEffect(.degrees(angle))
+    }
+}
+
+/// Artwork clipped to a circle and spun like a record while audio plays.
+/// The rotation is a compositor-driven linear animation (60 fps) rather than
+/// a timer: a 30 fps state timer made the disc visibly step. Pausing pins the
+/// angle where it stands instead of snapping back to zero.
+struct SpinningCover: View {
+    let track: Track?
+    let cacheKey: String
+    var radius: CGFloat = Radius.art
+    let palette: M3Palette
+    var fallback: PlatformImage? = nil
+    let isPlaying: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject private var appearance = AppearanceSettings.shared
+    @StateObject private var clock = SpinClock()
+
+    var body: some View {
+        Group {
+            if appearance.vinylRecords {
+                GeometryReader { geo in
+                    let side = min(geo.size.width, geo.size.height)
+                    let disc = side * 0.94
+                    // At 42pt the frost and groove highlights washed the band
+                    // out to mid-grey. Keep the compact record much darker.
+                    let compact = side < 90
+                    // When the clock is frozen (no playback) the timeline
+                    // stops entirely: 60 fps no-op redraws were needless work
+                    // and could starve input on a real device.
+                    TimelineView(.animation(minimumInterval: nil,
+                                            paused: clock.frozen)) { timeline in
+                    ZStack {
+                        Circle()
+                            .stroke(Color.black.opacity(compact ? 0.25 : 0.14),
+                                    lineWidth: side * 0.018)
+                            .frame(width: disc * 1.035, height: disc * 1.035)
+
+                        ZStack {
+                            Circle().fill(Color(white: compact ? 0.02 : 0.10))
+                            ForEach(1...26, id: \.self) { ring in
+                                let d = disc * (0.72 + CGFloat(ring) * 0.009)
+                                Circle()
+                                    .stroke(Color.white.opacity(compact ? 0.045 : 0.07),
+                                            lineWidth: 0.55)
+                                    .frame(width: d, height: d)
+                            }
+                            CoverArt(track: track, cacheKey: cacheKey, radius: 999,
+                                     palette: palette, fallback: fallback)
+                                .clipShape(Circle())
+                                .frame(width: disc * 0.70, height: disc * 0.70)
+                                .overlay(Circle().stroke(Color.black.opacity(0.45),
+                                                         lineWidth: side * 0.008))
+                            Circle()
+                                .fill(Color(white: 0.94).opacity(0.85))
+                                .frame(width: max(2, side * 0.016),
+                                       height: max(2, side * 0.016))
+                        }
+                        .frame(width: disc, height: disc)
+                        .rotationEffect(.degrees(clock.angle(at: timeline.date)))
+
+                        // Sheen is painted only on the black band, so the
+                        // centre label keeps its own light. A bright grazing
+                        // arc at upper-left and a dark falloff at lower-right
+                        // are what make the edge read as glossy vinyl.
+                        let label = disc * 0.70
+                        let ringSide = (disc + label) / 2
+                        let ringWidth = (disc - label) / 2
+                        Circle()
+                            .stroke(LinearGradient(
+                                stops: [
+                                    .init(color: .white.opacity(compact ? 0.60 : 0.32), location: 0),
+                                    .init(color: .white.opacity(compact ? 0.22 : 0.10), location: 0.28),
+                                    .init(color: .clear, location: 0.55)
+                                ],
+                                startPoint: .topLeading, endPoint: .bottomTrailing),
+                                style: StrokeStyle(lineWidth: ringWidth))
+                            .frame(width: ringSide, height: ringSide)
+                            .blendMode(.screen)
+                            .allowsHitTesting(false)
+
+                        Circle()
+                            .stroke(LinearGradient(
+                                stops: [
+                                    .init(color: .clear, location: 0.42),
+                                    .init(color: .black.opacity(compact ? 0.30 : 0.18), location: 1)
+                                ],
+                                startPoint: .topLeading, endPoint: .bottomTrailing),
+                                style: StrokeStyle(lineWidth: ringWidth))
+                            .frame(width: ringSide, height: ringSide)
+                            .allowsHitTesting(false)
+                    }
+                    .frame(width: side, height: side)
+                    }
+                }
+            } else {
+                CoverArt(track: track, cacheKey: cacheKey, radius: radius,
+                         palette: palette, fallback: fallback)
+            }
+        }
+        .onChange(of: isPlaying) { _, playing in updateSpin(playing) }
+        .onChange(of: appearance.vinylRecords) { _, on in updateSpin(on && isPlaying) }
+        .onChange(of: reduceMotion) { _, reduced in updateSpin(!reduced && isPlaying) }
+        .onAppear { updateSpin(isPlaying) }
+    }
+
+    private func updateSpin(_ playing: Bool) {
+        let now = Date()
+        if playing, appearance.vinylRecords, !reduceMotion {
+            clock.resume(at: now)
+        } else {
+            clock.pause(at: now)
         }
     }
 }

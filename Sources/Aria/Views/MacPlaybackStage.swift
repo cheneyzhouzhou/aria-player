@@ -329,12 +329,11 @@ struct MacPlaybackStage: View {
     private var leftColumn: some View {
         if let track = player.current {
             VStack(alignment: .leading, spacing: 0) {
-                CoverArt(track: track, cacheKey: track.albumKey, radius: 22, palette: palette,
-                         // Tracks without their own sleeve fall back to the
-                         // bundled default cover, the same image the phone
-                         // uses — so the player shows the same rounded cover
-                         // on both platforms instead of a bare music-note tile.
-                         fallback: track.hasArtwork ? nil : DefaultCover.image)
+                SpinningCover(track: track, cacheKey: track.albumKey,
+                              radius: appearance.vinylRecords ? 999 : 22,
+                              palette: palette,
+                              fallback: track.hasArtwork ? nil : DefaultCover.image,
+                              isPlaying: player.isPlaying)
                     .frame(width: 300, height: 300)
                     .shadow(color: .black.opacity(0.38), radius: 30, y: 14)
 
